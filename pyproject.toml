@@ -1,0 +1,55 @@
+# Copyright 2026 Dheeraj Turaga
+# SPDX-License-Identifier: Apache-2.0
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "airflow-provider-inbound-webhooks"
+version = "0.1.0.dev0"
+description = "Inbound webhooks for Apache Airflow: deliveries from GitHub, GitLab and other services become asset events"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Dheeraj Turaga" }]
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Framework :: Apache Airflow",
+    "Framework :: Apache Airflow :: Provider",
+    "Programming Language :: Python :: 3",
+]
+# Developed and tested only against Airflow main (3.4.0.dev); see "Status" in the README.
+dependencies = ["apache-airflow>=3.4.0.dev0"]
+
+[project.urls]
+Source = "https://github.com/dheerajturaga/airflow-provider-inbound-webhooks"
+
+[project.entry-points."airflow.plugins"]
+webhooks = "airflow_inbound_webhooks.plugin:WebhooksPlugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/airflow_inbound_webhooks"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "TC"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI resolves dependency annotations at runtime.
+"src/airflow_inbound_webhooks/app.py" = ["TC001", "TC002"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["airflow_inbound_webhooks"]
+required-imports = ["from __future__ import annotations"]
+
+[tool.pytest]
+addopts = ["--tb=short", "-rasl", "--asyncio-mode=strict"]
+asyncio_default_fixture_loop_scope = "function"
+# tests_common's logging fixture requires it.
+log_level = "INFO"
+pythonpath = ["src"]
+testpaths = ["tests"]
