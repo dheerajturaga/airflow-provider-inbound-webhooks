@@ -31,20 +31,96 @@ webhooks = "airflow_inbound_webhooks.plugin:WebhooksPlugin"
 [tool.hatch.build.targets.wheel]
 packages = ["src/airflow_inbound_webhooks"]
 
+# Ruff settings follow apache/airflow's pyproject.toml, minus monorepo-specific paths and bans.
 [tool.ruff]
 line-length = 110
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "TC"]
+select = ["E4", "E7", "E9", "F"]
+extend-select = [
+    "I", # isort
+    "UP", # pyupgrade
+    "ASYNC", # flake8-async
+    "ISC", # implicit string concatenation
+    "TC", # TYPE_CHECKING blocks
+    "G", # flake8-logging-format
+    "LOG", # flake8-logging
+    "PT", # flake8-pytest-style
+    "B015", # useless comparison
+    "TID25", # flake8-tidy-imports
+    "E", # pycodestyle
+    "W", # pycodestyle
+    "PLW0120", "PLW0127", "PLW0128", "PLW0129", "PLW0131", "PLW0133", "PLW0177", "PLW0211",
+    "PLW0245", "PLW0406", "PLW0602", "PLW0604", "PLW0642", "PLW0711", "PLW1501", "PLW1507",
+    "PLW1508", "PLW1509", "PLW1510", "PLW1641", "PLW2101", "PLW2901", "PLW3301", "PLE1205",
+    "RUF006", "RUF015", "RUF019", "RUF100",
+    "D1", "D2", "D213", "D3", "D400", "D401", "D402", "D403", "D412", "D419",
+    "PGH004", "PGH005",
+    "S101", # no assert outside tests
+    "SIM105", "SIM107", "SIM300",
+    "B004", "B006", "B007", "B008", "B012", "B017", "B019", "B023", "B028", "B904",
+    "TRY002", # no bare `raise Exception`
+    "RET505", "RET506", "RET507", "RET508",
+    "PTH206",
+]
+ignore = [
+    "D100", "D102", "D103", "D104", "D105", "D107",
+    "D203", # conflicts with D211
+    "D212", # conflicts with D213
+    "E731", # lambda assignment
+    "TC003", # keep stdlib imports out of TYPE_CHECKING
+    "PT007", "PT013", "PT019",
+    # Overlap with the formatter: https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules
+    "W191", "E111", "E114", "E117", "D206", "D300", "Q000", "Q001", "Q002", "Q003", "COM812", "COM819",
+    "E501",
+]
+unfixable = ["PT022"]
 
 [tool.ruff.lint.per-file-ignores]
 # FastAPI resolves dependency annotations at runtime.
 "src/airflow_inbound_webhooks/app.py" = ["TC001", "TC002"]
+"tests/*" = ["D", "S101", "TRY002"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Body", "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Security"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"airflow.AirflowException".msg = "Raise a built-in or a dedicated exception instead."
+"datetime.datetime.utcnow".msg = "Use datetime.datetime.now(tz=datetime.timezone.utc)"
+"datetime.datetime.utcfromtimestamp".msg = "Use datetime.datetime.fromtimestamp(tz=datetime.timezone.utc)"
+"locale.getdefaultlocale".msg = "Use locale.setlocale() and locale.getlocale() instead."
+"logging.debug".msg = "Use a module logger: logging.getLogger(__name__)"
+"logging.info".msg = "Use a module logger: logging.getLogger(__name__)"
+"logging.warning".msg = "Use a module logger: logging.getLogger(__name__)"
+"logging.error".msg = "Use a module logger: logging.getLogger(__name__)"
+"logging.exception".msg = "Use a module logger: logging.getLogger(__name__)"
+"logging.critical".msg = "Use a module logger: logging.getLogger(__name__)"
+"unittest.TestCase".msg = "Use pytest-style test classes"
+"unittest.skip".msg = "Use pytest.mark.skip"
+"unittest.skipIf".msg = "Use pytest.mark.skipif"
+
+[tool.ruff.lint.flake8-type-checking]
+exempt-modules = ["typing", "typing_extensions", "sqlalchemy.orm.Mapped"]
+
+[tool.ruff.lint.flake8-pytest-style]
+mark-parentheses = false
+fixture-parentheses = false
+
+[tool.ruff.format]
+docstring-code-format = true
 
 [tool.ruff.lint.isort]
-known-first-party = ["airflow_inbound_webhooks"]
 required-imports = ["from __future__ import annotations"]
+combine-as-imports = true
+known-first-party = ["airflow_inbound_webhooks"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder", "testing"]
+
+[tool.ruff.lint.isort.sections]
+testing = ["tests_common"]
 
 [tool.pytest]
 addopts = ["--tb=short", "-rasl", "--asyncio-mode=strict"]

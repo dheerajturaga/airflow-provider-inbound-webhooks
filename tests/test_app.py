@@ -21,11 +21,12 @@ from airflow.models.asset import (
 from airflow.models.dag import DagModel
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
-from tests_common.test_utils.config import conf_vars
-from tests_common.test_utils.db import clear_db_assets, clear_db_dags, clear_db_runs
 
 from airflow_inbound_webhooks.app import build_app
 from airflow_inbound_webhooks.plugin import WebhooksPlugin
+
+from tests_common.test_utils.config import conf_vars
+from tests_common.test_utils.db import clear_db_assets, clear_db_dags, clear_db_runs
 
 pytestmark = pytest.mark.db_test
 

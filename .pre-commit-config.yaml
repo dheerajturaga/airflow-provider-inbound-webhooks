@@ -1,0 +1,179 @@
+# Copyright 2026 Dheeraj Turaga
+# SPDX-License-Identifier: Apache-2.0
+#
+# Checks ported from apache/airflow's .pre-commit-config.yaml, pinned to the same revisions. Airflow
+# hooks that only make sense in its monorepo (Breeze, Helm, SDK schema syncs, providers, migrations)
+# are left out. Run with prek: `prek install` once, then `prek run --all-files`.
+---
+default_stages: [pre-commit, pre-push]
+default_install_hook_types: [pre-commit, commit-msg]
+minimum_prek_version: '0.3.4'
+default_language_version:
+  python: python3
+  node: 22.19.0
+repos:
+  - repo: meta
+    hooks:
+      - id: check-hooks-apply
+        name: Check if all hooks apply to the repository
+  - repo: https://github.com/Lucas-C/pre-commit-hooks
+    rev: ad1b27d73581aa16cca06fc4a0761fc563ffe8e8  # frozen: v1.5.6
+    hooks:
+      - id: insert-license
+        name: Add license for all Python files
+        files: \.pyi?$
+        args:
+          - --comment-style
+          - "|#|"
+          - --license-filepath
+          - license-header.txt
+          - --fuzzy-match-generates-todo
+      - id: insert-license
+        name: Add license for all TOML and YAML files
+        files: \.(toml|ya?ml)$
+        args:
+          - --comment-style
+          - "|#|"
+          - --license-filepath
+          - license-header.txt
+          - --fuzzy-match-generates-todo
+  - repo: https://github.com/adamchainz/blacken-docs
+    rev: fda77690955e9b63c6687d8806bafd56a526e45f  # frozen: 1.20.0
+    hooks:
+      - id: blacken-docs
+        name: Run black on docs
+        args:
+          - --line-length=110
+          - --target-version=py310
+          - --target-version=py311
+          - --target-version=py312
+          - --target-version=py313
+        additional_dependencies: [black==26.1.0]
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
+    hooks:
+      - id: check-merge-conflict
+        name: Check that merge conflicts are not being committed
+      - id: debug-statements
+        name: Detect accidentally committed debug statements
+      - id: check-builtin-literals
+        name: Require literal syntax when initializing builtins
+      - id: detect-private-key
+        name: Detect if private key is added to the repository
+      - id: end-of-file-fixer
+        name: Make sure that there is an empty line at the end
+      - id: mixed-line-ending
+        name: Detect if mixed line ending is used (\r vs. \r\n)
+      - id: trailing-whitespace
+        name: Remove trailing whitespace at end of line
+  - repo: https://github.com/pre-commit/pygrep-hooks
+    rev: 3a6eb0fadf60b3cccfd80bad9dbb6fae7e47b316  # frozen: v1.10.0
+    hooks:
+      - id: python-no-log-warn
+        name: Check if there are no deprecate log warn
+  - repo: https://github.com/adrienverge/yamllint
+    rev: cba56bcde1fdd01c1deb3f945e69764c291a6530  # frozen: v1.38.0
+    hooks:
+      - id: yamllint
+        name: Check YAML files with yamllint
+        entry: yamllint -c yamllint-config.yml --strict
+        types: [yaml]
+  - repo: https://github.com/ikamensh/flynt
+    rev: 97be693bf18bc2f050667dd282d243e2824b81e2  # frozen: 1.0.6
+    hooks:
+      - id: flynt
+        name: Run flynt string format converter for Python
+        args: [--line-length, "99999"]
+  - repo: https://github.com/codespell-project/codespell
+    rev: 57b21406f092110c18776e39b0bda50d37c945c8  # frozen: v2.4.3
+    hooks:
+      - id: codespell
+        name: Run codespell
+        types: [text]
+  - repo: local
+    hooks:
+      - id: ruff
+        name: Run 'ruff' for extremely fast Python linting
+        entry: ruff check --force-exclude
+        language: python
+        types_or: [python, pyi]
+        args: [--fix]
+        require_serial: true
+        additional_dependencies: [ruff==0.16.8]
+      - id: ruff-format
+        name: Run 'ruff format'
+        entry: ruff format --force-exclude
+        language: python
+        types_or: [python, pyi]
+        require_serial: true
+        additional_dependencies: [ruff==0.16.8]
+      - id: bandit
+        name: bandit
+        description: Bandit is a tool for finding common security issues in Python code
+        entry: bandit
+        language: python
+        types: [python]
+        additional_dependencies: [bandit==1.7.6]
+        require_serial: true
+        files: ^src/
+        args: [--skip, "B101,B301,B324,B403,B404,B603", --severity-level, high]
+      - id: lint-markdown
+        name: Run markdownlint
+        entry: markdownlint
+        language: node
+        types: [markdown]
+        additional_dependencies: [markdownlint-cli@0.38.0]
+      - id: check-pydevd-left-in-code
+        name: Check for pydevd debug statements accidentally left
+        language: pygrep
+        entry: pydevd.*settrace\(
+        files: \.py$
+      - id: check-urlparse-usage-in-code
+        name: Don't use urlparse in code
+        description: urlparse is not recommended, use urlsplit() in code instead
+        language: pygrep
+        entry: ^\s*from urllib\.parse import ((\|, )(urlparse\|urlunparse))+$
+        files: \.py$
+      - id: check-no-airflow-exception
+        name: Don't raise AirflowException
+        description: Raise a built-in or a dedicated exception, as Airflow requires of its own code
+        language: pygrep
+        entry: raise AirflowException\b
+        files: ^src/.*\.py$
+      - id: check-start-date-not-used-in-defaults
+        name: start_date not in default_args
+        language: pygrep
+        entry: 'default_args\s*=\s*{\s*("|'')start_date("|'')|("|'')start_date("|''):'
+        files: ^examples/dags/.*\.py$
+      - id: check-for-inclusive-language
+        name: Check for language that we do not accept as community
+        description: Please use more appropriate words for community documentation.
+        language: pygrep
+        entry: >
+          (?ix)
+          (black|white)[_-]?list|
+          \bshe\b|
+          \bhe\b|
+          \bher\b|
+          \bhis\b|
+          \bmaster\b|
+          \bslave\b|
+          \bsanity\b|
+          \bdummy\b
+        exclude: ^(\.pre-commit-config\.yaml|LICENSE)$
+      - id: check-zip-file-is-not-committed
+        name: Check no zip files are committed
+        language: fail
+        entry: Zip files are hard to track and have security implications; remove the zip file.
+        files: \.zip$
+      - id: check-no-conventional-commit-message
+        name: Check commit message is not Conventional Commits style
+        description: "Reject feat:/fix:/chore: style commit subjects; write plain prose, as Airflow does"
+        language: pygrep
+        entry: >
+          (?ix)\A
+          (?:bugfix|build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)
+          (?:\([^)]*\))?!?[:/]
+        args: [--multiline]
+        stages: [commit-msg]
+        always_run: true

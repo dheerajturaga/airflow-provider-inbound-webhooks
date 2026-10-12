@@ -3,6 +3,14 @@
 Inbound webhooks for [Apache Airflow](https://airflow.apache.org/). Not affiliated with or endorsed
 by the Apache Software Foundation.
 
+Every event from GitHub, GitLab or any service that signs its body or sends a shared secret is an
+asset. A Dag subscribes to an event by scheduling on its name; nobody writes routing code.
+
+```python
+@dag(schedule=Asset("github/my-org/web/pull_request/labeled/deploy-preview"))
+def web_deploy_preview(): ...
+```
+
 ## Status
 
 Prototype. Developed and tested only against Airflow `main` (3.4.0.dev); the latest Airflow
@@ -12,22 +20,15 @@ release is 3.3.x. Next steps:
    inside Airflow's Breeze (see "Run the tests").
 2. Decide the minimum Airflow version. Before 3.4, asset events are batched by default, so a run can
    carry several deliveries.
-3. Provider metadata: a `webhook` connection type with form fields instead of JSON in the extra.
-
-Every event from GitHub, GitLab or any service that signs its body or sends a shared secret is an
-asset. A Dag subscribes to an
-event by scheduling on its name; nobody writes routing code.
-
-```python
-@dag(schedule=Asset("github/my-org/web/pull_request/labeled/deploy-preview"))
-```
+3. CI on GitHub Actions running the static checks and tests, plus mypy and zizmor (see "Development").
+4. Provider metadata: a `webhook` connection type with form fields instead of JSON in the extra.
 
 ## Setup
 
 **Deployment Manager, once per sender:**
 
-1. `pip install airflow-provider-inbound-webhooks` on the API server. The plugin registers itself through the
-   `airflow.plugins` entry point and serves `POST /webhooks/<name>`.
+1. `pip install airflow-provider-inbound-webhooks` on the API server. The plugin registers itself
+   through the `airflow.plugins` entry point and serves `POST /webhooks/<name>`.
 2. Create a connection `webhook_<name>` whose password is the shared secret.
 3. Point the sender at `https://<api-server>/webhooks/<name>` with the same secret.
 
@@ -75,6 +76,25 @@ store nothing.
 A source is two methods, `verify()` and `parse()`, in `src/airflow_inbound_webhooks/sources.py`. `parse()`
 returns a path and kinds; naming, lookup and recording are shared. GitHub is ~40 lines; Gitea or
 Forgejo would be a GitHub subclass with different header names.
+
+## Development
+
+The static checks are the apache/airflow prek hooks that apply outside its monorepo, pinned to the
+same versions, plus Airflow's ruff rule set in `pyproject.toml`:
+
+```bash
+uv tool install prek
+prek install          # run the checks on every commit, including the commit message check
+prek run --all-files
+```
+
+They cover license headers, ruff lint and format, bandit, codespell, flynt, blacken-docs, yamllint,
+markdownlint, file hygiene (merge conflicts, debug statements, private keys, whitespace), and
+Airflow's regex checks: inclusive language, `urlparse`, raising `AirflowException`, `start_date` in
+`default_args`, and Conventional Commit subjects (write commit subjects as plain prose).
+
+Not yet: mypy, which needs an installable Airflow release this package supports, and zizmor, which
+needs CI workflows to check.
 
 ## Run the tests
 

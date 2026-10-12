@@ -1,0 +1,9 @@
+# Copyright 2026 Dheeraj Turaga
+# SPDX-License-Identifier: Apache-2.0
+---
+# https://yamllint.readthedocs.io/en/stable/
+extends: default
+
+rules:
+  line-length:
+    max: 110

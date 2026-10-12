@@ -1,0 +1,17 @@
+# Copyright 2026 Dheeraj Turaga
+# SPDX-License-Identifier: Apache-2.0
+---
+# Same rule set as apache/airflow: https://github.com/DavidAnson/markdownlint#rules--aliases
+MD004: false  # ul-style
+MD007: false  # ul-indent
+MD012: false  # no-multiple-blanks
+MD013: false  # line-length
+MD024: false  # no-duplicate-heading
+MD026: false  # no-trailing-punctuation
+MD029: false  # ol-prefix
+MD030: false  # list-marker-space
+MD033: false  # no-inline-html
+MD034: false  # no-bare-urls
+MD036: false  # no-emphasis-as-heading
+MD040: false  # fenced-code-language
+MD041: false  # first-line-heading
