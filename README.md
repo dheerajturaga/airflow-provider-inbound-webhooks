@@ -1,11 +1,20 @@
-# airflow-provider-inbound-webhooks
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
+    <img alt="Inbound Webhooks for Apache Airflow" src="docs/images/logo.svg" width="520">
+  </picture>
+</p>
 
-[![CI](https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/actions/workflows/ci.yml/badge.svg)](https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/actions/workflows/ci.yml)
-![Airflow 3.1.1+](https://img.shields.io/badge/Airflow-3.1.1%2B-017cee)
-![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue)
+<h3 align="center">Turn incoming webhooks into asset events that trigger your Airflow Dags.</h3>
 
-Inbound webhooks for [Apache Airflow](https://airflow.apache.org/): any service that can send a
-signed or secret-carrying webhook can trigger your Dags.
+<p align="center">
+  <a href="https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Airflow 3.1.1+" src="https://img.shields.io/badge/Airflow-3.1.1%2B-017cee">
+  <img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue">
+</p>
+
+`airflow-provider-inbound-webhooks` lets any service that can send a signed or secret-carrying
+webhook trigger your [Apache Airflow](https://airflow.apache.org/) Dags.
 
 Each verified delivery becomes an **asset event**, named after what happened. A Dag subscribes by
 scheduling on that name, and Airflow does the rest. There is no routing code to write, and adding a
