@@ -63,11 +63,22 @@ API server (Airflow 3.1.1 or later):
    The plugin registers itself through the `airflow.plugins` entry point. Restart the API server so
    it is loaded.
 
-2. **Create the connection** that defines the webhook. `demo` becomes the URL path
-   `/webhooks/demo`, and the password is the shared secret:
+2. **Create the connection** that defines the webhook. In the Airflow UI, under Admin →
+   Connections, add a connection of type **Inbound Webhook**:
+
+   | Field | Value |
+   |---|---|
+   | Connection Id | `webhook_demo`, so the URL path is `/webhooks/demo` |
+   | Shared secret | `change-me` |
+   | Source type | `hmac_json` |
+   | Signature header | `X-Signature` |
+   | Event field | `event` |
+   | Path field | `service` |
+
+   Or with the CLI:
 
    ```bash
-   airflow connections add webhook_demo --conn-type generic --conn-password 'change-me' \
+   airflow connections add webhook_demo --conn-type inbound_webhook --conn-password 'change-me' \
      --conn-extra '{"source_type": "hmac_json", "signature_header": "X-Signature",
                     "event_field": "event", "path_field": "service"}'
    ```
@@ -225,15 +236,18 @@ More examples, for GitHub labels and pushes, organization-wide releases and GitL
 ### Connection
 
 One connection per webhook, named `webhook_<name>`, where `<name>` is lowercase letters, digits,
-`-` and `_`. The connection type does not matter.
+`-` and `_`. Use the connection type **Inbound Webhook** (`inbound_webhook`) to get a form in the
+Airflow UI; its fields are stored in the connection extra under the keys below. The plugin reads
+connections of any type, so connections created elsewhere, for example from environment variables,
+work too. Fields left empty are treated as unset.
 
-| Field | Meaning |
-|---|---|
-| password | The shared secret. Required. |
-| extra `source_type` | Source type; defaults to `<name>` |
-| extra `team_name` | With multi-team Airflow (3.3 or later), events count as coming from this team, which decides which teams' Dags are queued. Without it, they only reach teamless Dags. Rejected on older Airflow. |
-| extra `max_body_bytes` | Larger requests are refused before verification. Default 1 MiB. |
-| extra, other fields | Options of the source type, listed above |
+| Form field | Extra key | Meaning |
+|---|---|---|
+| Shared secret | (password) | The shared secret. Required. |
+| Source type | `source_type` | Source type; defaults to `<name>` |
+| Team | `team_name` | With multi-team Airflow (3.3 or later), events count as coming from this team, which decides which teams' Dags are queued. Without it, they only reach teamless Dags. Rejected on older Airflow. |
+| Maximum body size | `max_body_bytes` | Larger requests are refused before verification. Default 1 MiB. |
+| Other fields | | Options of the source type, listed above |
 
 Connections stored in Airflow's metadata database, in environment variables
 (`AIRFLOW_CONN_WEBHOOK_<NAME>`) or in a secrets backend all work.
@@ -273,7 +287,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 | Airflow | Support |
 |---|---|
 | 3.3 and later | Supported, including `team_name` |
-| 3.1.1 to 3.2 | Supported; `team_name` is rejected because these versions cannot attribute asset events to a team |
+| 3.1.1 to 3.2 | Supported; `team_name` is rejected because these versions cannot attribute asset events to a team. On 3.1.1 and 3.1.2 the connection form only shows its fields when Flask-AppBuilder is installed (for example with the FAB provider); otherwise set the fields as JSON in the connection's extra |
 | 3.0, 3.1.0 | Not supported: their API server cannot read metadata-database connections through `airflow.sdk.Connection`, and installing next to them is refused |
 | 2.x | Not supported: there is no FastAPI API server for the plugin to mount on |
 

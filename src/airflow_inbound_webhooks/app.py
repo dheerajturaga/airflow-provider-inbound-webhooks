@@ -62,7 +62,8 @@ def get_configured_webhook(name: str) -> ConfiguredWebhook:
         conn = Connection.get(conn_id)
     except AirflowNotFoundException:
         raise HTTPException(HTTPStatus.NOT_FOUND, "Unknown webhook") from None
-    extra = conn.extra_dejson
+    # The connection form saves fields left empty as null or "", which mean "not set".
+    extra = {key: value for key, value in conn.extra_dejson.items() if value not in (None, "")}
     try:
         source_type = extra.get("source_type", name)
         if source_type not in SOURCE_TYPES:

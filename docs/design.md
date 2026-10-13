@@ -19,6 +19,24 @@ documentation is in the [README](../README.md).
 
 The plugin never creates Dag runs; Airflow's own asset scheduling does.
 
+## The connection form
+
+The package is also an Airflow provider: an `apache_airflow_provider` entry point returns its
+metadata, which registers the `inbound_webhook` connection type with `InboundWebhookHook`. The hook
+only anchors the form; the endpoint reads connections itself.
+
+Airflow builds connection forms differently across the supported versions, so
+`connection_form.py` defines the fields once and renders both formats:
+
+| Airflow | Form source |
+|---|---|
+| 3.2 and later | `conn-fields` and `ui-field-behaviour` in the provider metadata. The hook methods are then skipped, so their deprecation warning does not appear. |
+| 3.1.3 to 3.1.x | The hook's `get_connection_form_widgets()` and `get_ui_field_behaviour()`, called with WTForms, Flask-Babel and Flask-AppBuilder replaced by mocks |
+| 3.1.1 and 3.1.2 | The same hook methods, but these versions only mock those packages when they are installed, so without Flask-AppBuilder no provider's form has fields |
+
+The form saves every field, with `null` for those left empty, so the endpoint drops `null` and `""`
+values from the extra before reading it.
+
 ## Airflow internals the plugin uses
 
 | Dependency | Why | Risk |

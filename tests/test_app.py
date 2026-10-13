@@ -183,6 +183,35 @@ def test_token_header_service_configured_from_connection_extra(client, session, 
     assert get_queued_dag_ids(session) == {"evaluate_model"}
 
 
+@mock.patch.dict(
+    os.environ,
+    build_conn_env(
+        "deploybot",
+        source_type="hmac_json",
+        signature_header="X-Signature",
+        event_field="event",
+        event_header=None,
+        signature_prefix="",
+        max_body_bytes=None,
+    ),
+)
+def test_empty_extra_fields_are_unset(client, session, subscribe):
+    subscribe("smoke_test_billing", "deploybot/deployed")
+    body = json.dumps({"event": "deployed"}).encode()
+
+    response = client.post(
+        "/deploybot",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "X-Signature": hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest(),
+        },
+    )
+
+    assert response.status_code == 202
+    assert get_queued_dag_ids(session) == {"smoke_test_billing"}
+
+
 @pytest.mark.parametrize(
     ("process_context", "expected_status"),
     [pytest.param("server", 202, id="api-server"), pytest.param("client", 404, id="other-process")],

@@ -40,6 +40,7 @@ database. They are organised as:
 | `tests/test_app.py` | The endpoint, in process: routing, responses, connection handling |
 | `tests/test_api_server.py` | The real `airflow api-server` with the installed plugin, over HTTP, including the README quick start |
 | `tests/test_examples.py` | That every example Dag file builds against the installed Airflow |
+| `tests/test_provider_info.py` | That the provider metadata conforms to the installed Airflow's schema |
 
 Every change in behaviour needs a test that fails without it.
 
@@ -82,7 +83,8 @@ lookup and recording, is shared. Source types live in `src/airflow_inbound_webho
      `ValueError` for a malformed body.
    - `from_extra(extra)`, if the type has options: build it from the connection extra and raise
      `ValueError` naming the problem, which the endpoint reports as a misconfigured connection.
-2. Register it in `SOURCE_TYPES`.
+2. Register it in `SOURCE_TYPES`, and add it, and any new options, to the connection form in
+   `src/airflow_inbound_webhooks/connection_form.py`.
 3. Add tests in `tests/test_sources.py` for verification (valid, missing, wrong) and parsing, and an
    end-to-end case in `tests/test_app.py`.
 4. Document it under "Source types" in the README.

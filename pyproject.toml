@@ -32,6 +32,9 @@ Changelog = "https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/
 [project.entry-points."airflow.plugins"]
 webhooks = "airflow_inbound_webhooks.plugin:WebhooksPlugin"
 
+[project.entry-points.apache_airflow_provider]
+provider_info = "airflow_inbound_webhooks.get_provider_info:get_provider_info"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/airflow_inbound_webhooks"]
 

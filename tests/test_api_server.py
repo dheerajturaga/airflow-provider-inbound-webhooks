@@ -21,14 +21,19 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from importlib.util import find_spec
 from pathlib import Path
+from typing import Any
 
+import airflow
 import pytest
 from airflow.models.asset import AssetDagRunQueue, AssetEvent
 from airflow.models.connection import Connection
+from packaging.version import Version
 from sqlalchemy import select
 
 from airflow_inbound_webhooks.app import SUPPORTS_TEAM_ATTRIBUTION
+from airflow_inbound_webhooks.connection_form import CONN_TYPE, FIELDS, HOOK_NAME
 
 pytestmark = pytest.mark.usefixtures("clean_db")
 
@@ -39,6 +44,11 @@ LABELED = {
     "label": {"name": "deploy-preview"},
     "repository": {"full_name": "my-org/web"},
 }
+SEND_TEST_EVENT = Path(__file__).parents[1] / "examples" / "send_test_event.py"
+# Airflow 3.1.1 and 3.1.2 can only build connection forms when Flask-AppBuilder is installed.
+CONNECTION_FORMS_AVAILABLE = Version(airflow.__version__) >= Version("3.1.3") or bool(
+    find_spec("flask_appbuilder")
+)
 
 
 def find_free_port() -> int:
@@ -104,7 +114,7 @@ def webhook_connection(session):
     def add_connection(name: str, **extra) -> None:
         session.add(
             Connection(
-                conn_id=f"webhook_{name}", conn_type="generic", password=SECRET, extra=json.dumps(extra)
+                conn_id=f"webhook_{name}", conn_type=CONN_TYPE, password=SECRET, extra=json.dumps(extra)
             )
         )
         session.commit()
@@ -142,6 +152,86 @@ def test_team_name_needs_team_attribution(api_server_url, subscribe, webhook_con
     assert status == (202 if SUPPORTS_TEAM_ATTRIBUTION else 503)
 
 
+def request_json(
+    url: str, *, method: str = "GET", body: Any = None, token: str | None = None
+) -> tuple[int, Any]:
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, json.load(response)
+    except urllib.error.HTTPError as e:
+        return e.code, json.load(e)
+
+
+@pytest.fixture(scope="module")
+def api_token(api_server_url) -> str:
+    # tests/conftest.py sets the "admin" user's password.
+    status, body = request_json(
+        f"{api_server_url}/auth/token", method="POST", body={"username": "admin", "password": "admin"}
+    )
+    assert status == 201, body
+    return body["access_token"]
+
+
+def send_test_event(url: str, data: dict) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(SEND_TEST_EVENT), "--url", url, "--secret", SECRET, "--data", json.dumps(data)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_connection_form_is_served(api_server_url, api_token):
+    status, hooks = request_json(f"{api_server_url}/ui/connections/hook_meta", token=api_token)
+
+    assert status == 200
+    hook = next(hook for hook in hooks if hook["connection_type"] == CONN_TYPE)
+    assert hook["hook_name"] == HOOK_NAME
+    if not CONNECTION_FORMS_AVAILABLE:
+        assert not hook["extra_fields"]
+        return
+    assert list(hook["extra_fields"]) == [field.name for field in FIELDS]
+    assert hook["extra_fields"]["source_type"]["schema"]["enum"] == [
+        "hmac_json",
+        "token_header",
+        "github",
+        "gitlab",
+    ]
+    assert hook["standard_fields"]["password"]["title"] == "Shared secret"
+    assert all(hook["standard_fields"][field]["hidden"] for field in ("host", "port", "login"))
+
+
+def test_connection_saved_by_the_form_receives_deliveries(api_server_url, api_token, session, subscribe):
+    # The form saves every field, with null for those left empty.
+    extra = {field.name: None for field in FIELDS} | {
+        "source_type": "hmac_json",
+        "signature_header": "X-Signature",
+        "event_field": "event",
+        "path_field": "service",
+    }
+    connection = {
+        "connection_id": "webhook_demo",
+        "conn_type": CONN_TYPE,
+        "password": SECRET,
+        "extra": json.dumps(extra),
+    }
+    status, body = request_json(
+        f"{api_server_url}/api/v2/connections", method="POST", token=api_token, body=connection
+    )
+    assert status == 201, body
+    subscribe("smoke_test_billing", "demo/billing/deployed")
+
+    result = send_test_event(f"{api_server_url}/webhooks/demo", {"event": "deployed", "service": "billing"})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert list(session.scalars(select(AssetDagRunQueue.target_dag_id))) == ["smoke_test_billing"]
+
+
 def test_readme_quick_start(api_server_url, session, subscribe, webhook_connection):
     webhook_connection(
         "demo",
@@ -151,23 +241,8 @@ def test_readme_quick_start(api_server_url, session, subscribe, webhook_connecti
         path_field="service",
     )
     subscribe("smoke_test_billing", "demo/billing/deployed")
-    script = Path(__file__).parents[1] / "examples" / "send_test_event.py"
 
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "--url",
-            f"{api_server_url}/webhooks/demo",
-            "--secret",
-            SECRET,
-            "--data",
-            json.dumps({"event": "deployed", "service": "billing"}),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = send_test_event(f"{api_server_url}/webhooks/demo", {"event": "deployed", "service": "billing"})
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert '"status":"accepted"' in result.stdout

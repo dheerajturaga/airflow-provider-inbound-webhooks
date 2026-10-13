@@ -12,9 +12,14 @@ from pathlib import Path
 
 # Airflow reads its configuration when first imported, so this must run before any Airflow import.
 AIRFLOW_HOME = Path(tempfile.mkdtemp(prefix="airflow-inbound-webhooks-tests-"))
+# A known password for the default "admin" user, so tests can call the API server's REST API.
+(AIRFLOW_HOME / "simple_auth_manager_passwords.json").write_text('{"admin": "admin"}')
 os.environ.update(
     {
         "AIRFLOW_HOME": str(AIRFLOW_HOME),
+        "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE": str(
+            AIRFLOW_HOME / "simple_auth_manager_passwords.json"
+        ),
         "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN": f"sqlite:///{AIRFLOW_HOME / 'airflow.db'}",
         "AIRFLOW__CORE__LOAD_EXAMPLES": "False",
         "AIRFLOW__CORE__AUTH_MANAGER": (
