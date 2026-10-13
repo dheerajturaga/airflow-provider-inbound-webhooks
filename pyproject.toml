@@ -128,3 +128,8 @@ known-first-party = ["airflow_inbound_webhooks"]
 [tool.pytest]
 addopts = ["--tb=short", "-rasl"]
 testpaths = ["tests"]
+
+[[tool.mypy.overrides]]
+# Optional: only imported when Airflow 3.1 builds the connection form, with these modules mocked.
+module = ["flask_appbuilder.*", "flask_babel", "wtforms", "wtforms.*"]
+ignore_missing_imports = true
