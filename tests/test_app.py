@@ -13,6 +13,8 @@ from airflow.models.asset import AssetDagRunQueue, AssetEvent
 from airflow.models.connection import Connection as ConnectionModel
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 from airflow_inbound_webhooks.app import build_app
 
@@ -264,6 +266,18 @@ def test_misconfigured_connection_fails_closed(client, conn):
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Webhook is misconfigured"}
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_delivery_is_not_acknowledged_when_its_events_are_not_stored(session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    commit_failure = OperationalError("COMMIT", {}, Exception("database is locked"))
+
+    with mock.patch.object(Session, "commit", side_effect=commit_failure):
+        response = post_github(TestClient(build_app(), raise_server_exceptions=False))
+
+    assert response.status_code == 500
+    assert count_asset_events(session) == 0
 
 
 @mock.patch("airflow_inbound_webhooks.app.SUPPORTS_TEAM_ATTRIBUTION", False)

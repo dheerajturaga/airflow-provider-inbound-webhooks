@@ -11,11 +11,11 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Annotated, Any
 
-from airflow.api_fastapi.common.db.common import SessionDep
 from airflow.assets.manager import asset_manager
 from airflow.exceptions import AirflowNotFoundException
 from airflow.models.asset import AssetModel
 from airflow.sdk import Connection
+from airflow.utils.session import create_session
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from sqlalchemy import select
 
@@ -110,7 +110,6 @@ def receive_webhook(
     request: Request,
     webhook: WebhookDep,
     body: Annotated[bytes, Depends(read_limited_body)],
-    session: SessionDep,
 ) -> dict[str, Any]:
     try:
         webhook.source.verify(request.headers, body, webhook.secret)
@@ -123,9 +122,6 @@ def receive_webhook(
         raise HTTPException(HTTPStatus.BAD_REQUEST, str(e)) from e
 
     candidates = build_candidate_names(webhook.name, event)
-    subscribed = session.scalars(
-        select(AssetModel).where(AssetModel.name.in_(candidates), AssetModel.active.has())
-    ).all()
     extra = {
         "source": webhook.name,
         "path": event.path,
@@ -133,16 +129,21 @@ def receive_webhook(
         "payload": event.payload,
     }
     asset_events: dict[str, int] = {}
-    for asset_model in subscribed:
-        asset_event = asset_manager.register_asset_change(
-            asset=asset_model,
-            extra=extra,
-            source_is_api=True,
-            api_user_teams={webhook.team_name} if webhook.team_name else set(),
-            session=session,
-        )
-        if asset_event is not None:
-            asset_events[asset_model.name] = asset_event.id
+    # Leaving the block commits, so a delivery is only acknowledged once its events are stored.
+    with create_session(scoped=False) as session:
+        subscribed = session.scalars(
+            select(AssetModel).where(AssetModel.name.in_(candidates), AssetModel.active.has())
+        ).all()
+        for asset_model in subscribed:
+            asset_event = asset_manager.register_asset_change(
+                asset=asset_model,
+                extra=extra,
+                source_is_api=True,
+                api_user_teams={webhook.team_name} if webhook.team_name else set(),
+                session=session,
+            )
+            if asset_event is not None:
+                asset_events[asset_model.name] = asset_event.id
     return {
         "status": "accepted" if asset_events else "no_subscribers",
         "asset_events": asset_events,

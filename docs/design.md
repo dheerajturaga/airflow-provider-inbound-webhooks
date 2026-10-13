@@ -15,7 +15,8 @@ documentation is in the [README](../README.md).
 5. `naming.build_candidate_names` turns those into every subscribable name.
 6. One query finds which candidates are active assets, that is, referenced by a Dag.
 7. `asset_manager.register_asset_change` records an asset event on each, which queues the Dags that
-   schedule on it. The request's database session commits when the endpoint returns.
+   schedule on it. The endpoint commits its own database session before responding, so `accepted`
+   means the events are stored.
 
 The plugin never creates Dag runs; Airflow's own asset scheduling does.
 
@@ -43,7 +44,7 @@ values from the extra before reading it.
 |---|---|---|
 | `airflow.assets.manager.asset_manager.register_asset_change` | Records the asset event and queues Dags exactly as Airflow does | Its signature changed in 3.2 and 3.3. It accepts and drops unknown keyword arguments, so `SUPPORTS_TEAM_ATTRIBUTION` checks for `api_user_teams` instead of passing it blindly. A deployment can replace the manager with `[core] asset_manager_class`. |
 | `airflow.models.asset.AssetModel` | Finds which candidate names are active assets | Database models are internal; a relationship was renamed in 3.1 |
-| `airflow.api_fastapi.common.db.common.SessionDep` | A database session per request, committed after the response | If it stopped committing, deliveries would be acknowledged but not stored; the tests check that events are stored |
+| `airflow.utils.session.create_session` | A database session the endpoint commits before it responds | Same signature in every supported version. It is what the API server's own `SessionDep` wraps; `SessionDep` is marked private and commits in dependency cleanup, whose timing depends on FastAPI (Airflow pins it with `scope="function"` from 3.2). |
 | Plugin apps are mounted without authentication | The endpoint must accept services that cannot log in | If Airflow ever required login for plugin apps, every delivery would be rejected |
 
 Public interfaces used: `AirflowPlugin` with `fastapi_apps` and the `airflow.plugins` entry point,

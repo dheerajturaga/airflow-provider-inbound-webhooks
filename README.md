@@ -334,8 +334,8 @@ Python 3.11. Each test run starts the real `airflow api-server` and sends it sig
 - Asset events from webhooks are not written to Airflow's audit log, because a delivery has no
   Airflow user.
 - Renaming a repository, project or service changes its event names, so Dags must be updated.
-- The plugin uses some Airflow internals (`asset_manager`, `AssetModel`, the API server's database
-  session), which CI checks against every supported version.
+- The plugin uses some Airflow internals (`asset_manager`, `AssetModel`, `create_session`), which CI
+  checks against every supported version.
 
 [docs/design.md](docs/design.md) covers the design, these limitations and the path towards Airflow
 core.
