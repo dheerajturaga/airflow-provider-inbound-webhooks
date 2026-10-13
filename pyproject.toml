@@ -118,15 +118,7 @@ docstring-code-format = true
 required-imports = ["from __future__ import annotations"]
 combine-as-imports = true
 known-first-party = ["airflow_inbound_webhooks"]
-section-order = ["future", "standard-library", "third-party", "first-party", "local-folder", "testing"]
-
-[tool.ruff.lint.isort.sections]
-testing = ["tests_common"]
 
 [tool.pytest]
-addopts = ["--tb=short", "-rasl", "--asyncio-mode=strict"]
-asyncio_default_fixture_loop_scope = "function"
-# tests_common's logging fixture requires it.
-log_level = "INFO"
-pythonpath = ["src"]
+addopts = ["--tb=short", "-rasl"]
 testpaths = ["tests"]

@@ -1,0 +1,91 @@
+# Copyright 2026 Dheeraj Turaga
+# SPDX-License-Identifier: Apache-2.0
+---
+name: CI
+
+on:  # yamllint disable-line rule:truthy
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly, so the "latest" matrix entry picks up a new Airflow release without waiting for a commit.
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-checks:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - name: Run prek
+        run: uvx prek==0.3.4 run --all-files --show-diff-on-failure
+
+  tests:
+    name: Tests (Airflow ${{ matrix.airflow }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The minimum supported version, the newest patch of each supported minor, and whatever is newest.
+        airflow: ["3.1.1", "3.1.8", "3.2.2", "3.3.2", "latest"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - name: Resolve the Airflow version
+        id: airflow
+        env:
+          REQUESTED: ${{ matrix.airflow }}
+        run: |
+          if [[ "$REQUESTED" == "latest" ]]; then
+            version=$(curl -sSf https://pypi.org/pypi/apache-airflow/json | jq -r .info.version)
+          else
+            version="$REQUESTED"
+          fi
+          echo "Testing against Airflow $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Install Airflow and the package with Airflow's constraints
+        env:
+          AIRFLOW_VERSION: ${{ steps.airflow.outputs.version }}
+        run: |
+          constraints="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.11.txt"
+          uv venv -p 3.11
+          uv pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "$constraints"
+          uv pip install --editable . pytest mypy --constraint "$constraints"
+      - name: Type-check
+        run: .venv/bin/mypy src
+      - name: Run tests
+        run: .venv/bin/pytest
+
+  minimum-airflow-version:
+    name: Refuses Airflow 3.1.0
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - name: Installing next to Airflow 3.1.0 must fail on the package's Airflow requirement
+        run: |
+          constraints="https://raw.githubusercontent.com/apache/airflow/constraints-3.1.0/constraints-3.11.txt"
+          uv venv -p 3.11
+          if uv pip install . "apache-airflow==3.1.0" --constraint "$constraints" > install.log 2>&1; then
+            echo "::error::The package installed next to Airflow 3.1.0"
+            exit 1
+          fi
+          # uv wraps its explanation across lines, so collapse whitespace before matching.
+          tr -s '[:space:]' ' ' < install.log | grep -q "depends on apache-airflow>=3.1.1" \
+            || { cat install.log; exit 1; }
+          echo "Refused as expected: the package depends on apache-airflow>=3.1.1"

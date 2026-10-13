@@ -3,7 +3,8 @@
 #
 # Checks ported from apache/airflow's .pre-commit-config.yaml, pinned to the same revisions. Airflow
 # hooks that only make sense in its monorepo (Breeze, Helm, SDK schema syncs, providers, migrations)
-# are left out. Run with prek: `prek install` once, then `prek run --all-files`.
+# are left out. CI runs the same hooks (.github/workflows/ci.yml). Run with prek: `prek install`
+# once, then `prek run --all-files`.
 ---
 default_stages: [pre-commit, pre-push]
 default_install_hook_types: [pre-commit, commit-msg]
@@ -90,6 +91,14 @@ repos:
       - id: codespell
         name: Run codespell
         types: [text]
+  - repo: https://github.com/woodruffw/zizmor-pre-commit
+    rev: fa412071e4f5d44d44f9e365f4676f9df92456a2  # frozen: v1.30.1
+    hooks:
+      - id: zizmor
+        name: Run zizmor to check for github workflow syntax errors
+        types: [yaml]
+        files: ^\.github/workflows/.*$
+        require_serial: true
   - repo: local
     hooks:
       - id: ruff

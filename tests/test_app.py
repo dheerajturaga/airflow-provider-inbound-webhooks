@@ -9,32 +9,14 @@ import os
 from unittest import mock
 
 import pytest
-from airflow import plugins_manager
-from airflow.api_fastapi.app import create_app
-from airflow.models.asset import (
-    AssetActive,
-    AssetDagRunQueue,
-    AssetEvent,
-    AssetModel,
-    DagScheduleAssetReference,
-)
+from airflow.models.asset import AssetDagRunQueue, AssetEvent
 from airflow.models.connection import Connection as ConnectionModel
-from airflow.models.dag import DagModel
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from airflow_inbound_webhooks.app import build_app
-from airflow_inbound_webhooks.plugin import WebhooksPlugin
 
-from tests_common.test_utils.config import conf_vars
-from tests_common.test_utils.db import (
-    clear_db_assets,
-    clear_db_connections,
-    clear_db_dags,
-    clear_db_runs,
-)
-
-pytestmark = pytest.mark.db_test
+pytestmark = pytest.mark.usefixtures("clean_db")
 
 SECRET = "s3cret"
 
@@ -91,36 +73,6 @@ def count_asset_events(session) -> int:
 
 def get_queued_dag_ids(session) -> set[str]:
     return set(session.scalars(select(AssetDagRunQueue.target_dag_id)))
-
-
-@pytest.fixture(autouse=True)
-def clean_db():
-    clear_db_runs()
-    clear_db_dags()
-    clear_db_assets()
-    yield
-    clear_db_runs()
-    clear_db_dags()
-    clear_db_assets()
-
-
-@pytest.fixture
-def subscribe(session, testing_dag_bundle):
-    """Make a Dag schedule on an asset name, as parsing a Dag file would."""
-
-    def subscribe_dag(dag_id: str, asset_name: str) -> None:
-        asset_model = AssetModel(name=asset_name, uri=asset_name, group="asset")
-        asset_model.scheduled_dags = [DagScheduleAssetReference(dag_id=dag_id)]
-        session.add_all(
-            [
-                DagModel(dag_id=dag_id, is_paused=False, bundle_name="testing"),
-                asset_model,
-                AssetActive.for_asset(asset_model),
-            ]
-        )
-        session.commit()
-
-    return subscribe_dag
 
 
 @pytest.fixture
@@ -231,14 +183,6 @@ def test_token_header_service_configured_from_connection_extra(client, session, 
     assert get_queued_dag_ids(session) == {"evaluate_model"}
 
 
-@pytest.fixture
-def clean_connections():
-    clear_db_connections(add_default_connections_back=False)
-    yield
-    clear_db_connections(add_default_connections_back=False)
-
-
-@pytest.mark.usefixtures("clean_connections")
 @pytest.mark.parametrize(
     ("process_context", "expected_status"),
     [pytest.param("server", 202, id="api-server"), pytest.param("client", 404, id="other-process")],
@@ -303,6 +247,7 @@ def test_team_name_rejected_when_asset_manager_cannot_attribute_teams(client, se
     assert count_asset_events(session) == 0
 
 
+@mock.patch("airflow_inbound_webhooks.app.SUPPORTS_TEAM_ATTRIBUTION", True)
 @mock.patch("airflow_inbound_webhooks.app.asset_manager", autospec=True)
 @pytest.mark.parametrize(("team_name", "expected_teams"), [(None, set()), ("team_a", {"team_a"})])
 def test_events_are_attributed_to_connection_team(mock_asset_manager, subscribe, team_name, expected_teams):
@@ -313,24 +258,3 @@ def test_events_are_attributed_to_connection_team(mock_asset_manager, subscribe,
         assert post_github(TestClient(build_app())).status_code == 202
 
     assert mock_asset_manager.register_asset_change.call_args.kwargs["api_user_teams"] == expected_teams
-
-
-@mock.patch.dict(os.environ, GITHUB_CONN)
-@conf_vars(
-    {
-        (
-            "core",
-            "auth_manager",
-        ): "airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager"
-    }
-)
-def test_plugin_is_reachable_on_api_server_without_airflow_credentials():
-    with mock.patch.object(
-        plugins_manager, "get_fastapi_plugins", return_value=(WebhooksPlugin.fastapi_apps, [])
-    ):
-        api_server = TestClient(create_app())
-
-    response = post_github(api_server, path="/webhooks/github")
-
-    assert response.status_code == 202
-    assert response.json()["status"] == "no_subscribers"

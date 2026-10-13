@@ -13,13 +13,8 @@ def web_deploy_preview(): ...
 
 ## Status
 
-Prototype. Requires Airflow 3.1.1 or later (see "Airflow versions"). Next steps:
-
-1. A standalone test setup. The tests still use fixtures from Airflow's `tests_common`, so they run
-   inside Airflow's Breeze (see "Run the tests").
-2. CI on GitHub Actions running the static checks, the tests and an Airflow version matrix, plus mypy
-   and zizmor (see "Development").
-3. Provider metadata: a `webhook` connection type with form fields instead of JSON in the extra.
+Prototype. Requires Airflow 3.1.1 or later (see "Airflow versions"). Next step: provider metadata, a
+`webhook` connection type with form fields instead of JSON in the extra.
 
 ## Airflow versions
 
@@ -97,21 +92,34 @@ prek run --all-files
 ```
 
 They cover license headers, ruff lint and format, bandit, codespell, flynt, blacken-docs, yamllint,
-markdownlint, file hygiene (merge conflicts, debug statements, private keys, whitespace), and
-Airflow's regex checks: inclusive language, `urlparse`, raising `AirflowException`, `start_date` in
-`default_args`, and Conventional Commit subjects (write commit subjects as plain prose).
-
-Not yet: mypy, which needs an installable Airflow release this package supports, and zizmor, which
-needs CI workflows to check.
+markdownlint, zizmor for the workflows, file hygiene (merge conflicts, debug statements, private
+keys, whitespace), and Airflow's regex checks: inclusive language, `urlparse`, raising
+`AirflowException`, `start_date` in `default_args`, and Conventional Commit subjects (write commit
+subjects as plain prose).
 
 ## Run the tests
 
-Until the standalone setup exists, clone this repository into the `files/` directory of an Airflow
-checkout, then from that checkout:
+Install an Airflow version with its constraints, then the package in editable mode; the plugin is
+only loaded through its entry point, which the API server tests rely on:
 
 ```bash
-breeze run pytest /files/airflow-provider-inbound-webhooks/tests -v
+AIRFLOW_VERSION=3.3.2
+CONSTRAINTS="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.11.txt"
+uv venv -p 3.11
+uv pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "$CONSTRAINTS"
+uv pip install --editable . pytest mypy --constraint "$CONSTRAINTS"
+.venv/bin/mypy src
+.venv/bin/pytest
 ```
+
+The tests create a throwaway Airflow home with a SQLite database, so no Airflow setup is needed.
+`tests/test_api_server.py` starts the real `airflow api-server` and sends it signed deliveries over
+HTTP.
+
+CI (`.github/workflows/ci.yml`) runs the static checks, then mypy and the tests against Airflow
+3.1.1, the newest patch of each supported minor and the newest release, and checks that installing
+next to Airflow 3.1.0 is refused. It also runs weekly, so a new Airflow release is tested without a
+commit.
 
 ## Open questions before proposing for core
 
