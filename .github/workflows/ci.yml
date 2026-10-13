@@ -64,7 +64,11 @@ jobs:
           uv venv -p 3.11
           uv pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "$constraints"
           uv pip install --editable . pytest mypy --constraint "$constraints"
+      # Only against the newest release: older ones annotate their models less precisely (3.1's are
+      # Column[...] declarations, and 3.1.1 pins an untyped SQLAlchemy), so mypy reports their typing,
+      # not this package's. Changed signatures in Airflow internals show up in the newest release first.
       - name: Type-check
+        if: matrix.airflow == 'latest'
         run: .venv/bin/mypy src
       - name: Run tests
         run: .venv/bin/pytest

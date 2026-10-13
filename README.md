@@ -116,9 +116,9 @@ The tests create a throwaway Airflow home with a SQLite database, so no Airflow 
 `tests/test_api_server.py` starts the real `airflow api-server` and sends it signed deliveries over
 HTTP.
 
-CI (`.github/workflows/ci.yml`) runs the static checks, then mypy and the tests against Airflow
-3.1.1, the newest patch of each supported minor and the newest release, and checks that installing
-next to Airflow 3.1.0 is refused. It also runs weekly, so a new Airflow release is tested without a
+CI (`.github/workflows/ci.yml`) runs the static checks, then the tests against Airflow 3.1.1, the
+newest patch of each supported minor and the newest release (plus mypy against the newest), and
+checks that installing next to Airflow 3.1.0 is refused. It also runs weekly, so a new Airflow release is tested without a
 commit.
 
 ## Open questions before proposing for core
