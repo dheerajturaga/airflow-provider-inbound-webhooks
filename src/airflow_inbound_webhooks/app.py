@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 from dataclasses import dataclass
@@ -26,6 +27,11 @@ log = logging.getLogger(__name__)
 CONN_ID_PREFIX = "webhook_"
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024
 WEBHOOK_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+# register_asset_change accepts and drops unknown keyword arguments, so passing api_user_teams to an
+# asset manager without it (Airflow < 3.3) would silently lose team attribution instead of failing.
+SUPPORTS_TEAM_ATTRIBUTION = (
+    "api_user_teams" in inspect.signature(asset_manager.register_asset_change).parameters
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,8 @@ def get_configured_webhook(name: str) -> ConfiguredWebhook:
             raise ValueError(f"unknown source_type {source_type!r}; expected one of {sorted(SOURCE_TYPES)}")
         if not conn.password:
             raise ValueError("the password, which holds the shared secret, is empty")
+        if extra.get("team_name") and not SUPPORTS_TEAM_ATTRIBUTION:
+            raise ValueError("team_name needs Airflow 3.3 or later to attribute events to a team")
         return ConfiguredWebhook(
             name=name,
             source=SOURCE_TYPES[source_type].from_extra(extra),

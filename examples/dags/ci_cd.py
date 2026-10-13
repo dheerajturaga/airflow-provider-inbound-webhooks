@@ -16,17 +16,19 @@ any_repo_release = Asset("github/my-org/*/release/published")
 api_pipeline_success = Asset("gitlab/platform/api/pipeline/success")
 
 
-def get_payload(triggering_asset_events, asset):
-    # Airflow 3.4 gives each delivery its own run unless the Dag sets batch_asset_events.
-    return triggering_asset_events[asset][0].extra["payload"]
+def get_payloads(triggering_asset_events, asset) -> list[dict]:
+    # Before Airflow 3.4, or with batch_asset_events, one run can carry several deliveries; events
+    # are not ordered, so sort them oldest first.
+    events = sorted(triggering_asset_events[asset], key=lambda event: event.timestamp)
+    return [event.extra["payload"] for event in events]
 
 
 @dag(schedule=web_deploy_preview_label)
 def web_deploy_preview():
     @task
     def deploy(*, triggering_asset_events=None):
-        pr = get_payload(triggering_asset_events, web_deploy_preview_label)
-        print(f"Deploying preview of PR #{pr['number']} at {pr['pull_request']['head']['sha']}")
+        for pr in get_payloads(triggering_asset_events, web_deploy_preview_label):
+            print(f"Deploying preview of PR #{pr['number']} at {pr['pull_request']['head']['sha']}")
 
     deploy()
 
@@ -35,7 +37,8 @@ def web_deploy_preview():
 def web_deploy_staging():
     @task
     def deploy(*, triggering_asset_events=None):
-        print(f"Deploying {get_payload(triggering_asset_events, web_main_push)['after']} to staging")
+        latest = get_payloads(triggering_asset_events, web_main_push)[-1]
+        print(f"Deploying {latest['after']} to staging")
 
     deploy()
 
@@ -44,8 +47,10 @@ def web_deploy_staging():
 def publish_release_notes():
     @task
     def publish(*, triggering_asset_events=None):
-        release = get_payload(triggering_asset_events, any_repo_release)
-        print(f"Publishing notes for {release['repository']['full_name']} {release['release']['tag_name']}")
+        for release in get_payloads(triggering_asset_events, any_repo_release):
+            print(
+                f"Publishing notes for {release['repository']['full_name']} {release['release']['tag_name']}"
+            )
 
     publish()
 
@@ -54,8 +59,8 @@ def publish_release_notes():
 def api_deploy():
     @task
     def deploy(*, triggering_asset_events=None):
-        pipeline = get_payload(triggering_asset_events, api_pipeline_success)
-        print(f"Deploying {pipeline['object_attributes']['sha']}")
+        latest = get_payloads(triggering_asset_events, api_pipeline_success)[-1]
+        print(f"Deploying {latest['object_attributes']['sha']}")
 
     deploy()
 

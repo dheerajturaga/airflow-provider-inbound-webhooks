@@ -13,18 +13,24 @@ def web_deploy_preview(): ...
 
 ## Status
 
-Prototype. Developed and tested only against Airflow `main` (3.4.0.dev); the latest Airflow
-release is 3.3.x. Next steps:
+Prototype. Requires Airflow 3.1.1 or later (see "Airflow versions"). Next steps:
 
 1. A standalone test setup. The tests still use fixtures from Airflow's `tests_common`, so they run
    inside Airflow's Breeze (see "Run the tests").
-2. Set the minimum Airflow version, likely 3.1.1. Webhook connections are read through the public
-   `airflow.sdk.Connection`, which only reads connections stored in the metadata database inside the
-   API server from 3.1.1 (3.0.x and 3.1.0 answer every delivery with a 500); connections in
-   environment variables or an external secrets backend work from 3.0. Before 3.4, asset events are
-   batched by default, so a run can carry several deliveries.
-3. CI on GitHub Actions running the static checks and tests, plus mypy and zizmor (see "Development").
-4. Provider metadata: a `webhook` connection type with form fields instead of JSON in the extra.
+2. CI on GitHub Actions running the static checks, the tests and an Airflow version matrix, plus mypy
+   and zizmor (see "Development").
+3. Provider metadata: a `webhook` connection type with form fields instead of JSON in the extra.
+
+## Airflow versions
+
+| Airflow | Support |
+|---|---|
+| 3.1.1 – 3.2.x | Supported. `team_name` is rejected: these versions cannot attribute asset events to a team. |
+| 3.3.x and later | Supported, including `team_name`. |
+| 3.0.x, 3.1.0 | Not supported. Their API server cannot read metadata-database connections through `airflow.sdk.Connection`, so every delivery fails with a 500. |
+
+Before Airflow 3.4, deliveries that arrive before the scheduler creates a run share that run, so Dags
+should iterate over all of their triggering events.
 
 ## Setup
 
@@ -49,11 +55,10 @@ it was unmodified, so prefer `hmac_json` when the service can sign.
 
 The connection is the only configuration: adding a sender needs no code or restart. A second
 GitHub (e.g. Enterprise Server) is `webhook_ghes` with extra `{"source_type": "github"}`. The
-extra also accepts `team_name` (multi-team attribution) and `max_body_bytes` (default 1 MiB).
+extra also accepts `team_name` (multi-team attribution, Airflow 3.3+) and `max_body_bytes` (default 1 MiB).
 
-**Dag author:** schedule on the event's name. Each delivery gets its own run (Airflow 3.4) and
-the full payload is in `triggering_asset_events[asset][0].extra["payload"]`. See
-`examples/dags/ci_cd.py`.
+**Dag author:** schedule on the event's name and iterate over `triggering_asset_events[asset]`;
+each event's `extra["payload"]` is the full delivery payload. See `examples/dags/ci_cd.py`.
 
 ## The naming rule
 

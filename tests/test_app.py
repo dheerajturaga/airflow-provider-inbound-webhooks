@@ -293,6 +293,16 @@ def test_misconfigured_connection_fails_closed(client, conn):
     assert response.json() == {"detail": "Webhook is misconfigured"}
 
 
+@mock.patch("airflow_inbound_webhooks.app.SUPPORTS_TEAM_ATTRIBUTION", False)
+@mock.patch.dict(os.environ, build_conn_env("github", team_name="team_a"))
+def test_team_name_rejected_when_asset_manager_cannot_attribute_teams(client, session):
+    response = post_github(client)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Webhook is misconfigured"}
+    assert count_asset_events(session) == 0
+
+
 @mock.patch("airflow_inbound_webhooks.app.asset_manager", autospec=True)
 @pytest.mark.parametrize(("team_name", "expected_teams"), [(None, set()), ("team_a", {"team_a"})])
 def test_events_are_attributed_to_connection_team(mock_asset_manager, subscribe, team_name, expected_teams):
