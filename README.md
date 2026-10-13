@@ -29,15 +29,39 @@ service's signature and records the delivery as an asset event.
 
 ## How it works
 
-```text
-service ──POST /webhooks/<name>──▶ Airflow API server (this plugin)
-                                     1. connection webhook_<name> → secret and source type
-                                     2. verify the signature or token         ✗ 401
-                                     3. name the event, e.g. demo/billing/deployed
-                                     4. record an asset event on every name a Dag schedules on
-                                                         │
-                                                         ▼
-                                   Airflow scheduler ──▶ Dag runs, payload in the asset event
+```mermaid
+flowchart LR
+    sender["Webhook sender<br/>GitHub, GitLab or any<br/>service with a secret"]:::sender
+
+    subgraph airflow ["Apache Airflow"]
+        subgraph plugin ["API server · inbound webhooks plugin"]
+            verify{"Signature<br/>valid?"}:::plugin
+            name["Name the event<br/>demo/billing/deployed"]:::plugin
+        end
+        conn[("Connection<br/>webhook_#lt;name#gt;")]:::store
+        event[("Asset event<br/>demo/billing/deployed")]:::store
+        sched["Scheduler"]:::airflow
+        dag1["Dag run<br/>smoke_test_billing"]:::dag
+        dag2["Dag run<br/>notify_on_deploy"]:::dag
+    end
+
+    sender -- "POST /webhooks/#lt;name#gt;" --> verify
+    verify -. "reads secret" .-> conn
+    verify -- "yes" --> name
+    name -- "record" --> event
+    event --> sched
+    sched --> dag1 & dag2
+    verify -. "401 if invalid" .-> sender
+
+    classDef sender fill:#ffffff,stroke:#8c959f,color:#1f2328
+    classDef plugin fill:#ddf4ff,stroke:#0969da,color:#0a3069
+    classDef store fill:#fff8c5,stroke:#9a6700,color:#4d2d00
+    classDef airflow fill:#ddf4ff,stroke:#0969da,color:#0a3069
+    classDef dag fill:#dafbe1,stroke:#1a7f37,color:#044f1e
+    style airflow fill:none,stroke:#017cee,stroke-width:2px
+    style plugin fill:none,stroke:#54aeff,stroke-dasharray:4 3
+    %% Arrows are numbered from 0 in order, counting "dag1 & dag2" as two: 7 is the 401 arrow.
+    linkStyle 7 stroke:#cf222e
 ```
 
 The plugin never runs Dags itself. It records asset events, Airflow queues every Dag that schedules
