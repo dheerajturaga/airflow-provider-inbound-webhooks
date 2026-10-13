@@ -9,6 +9,7 @@ import os
 from unittest import mock
 
 import pytest
+from airflow.assets.manager import AssetManager
 from airflow.models.asset import AssetDagRunQueue, AssetEvent
 from airflow.models.connection import Connection as ConnectionModel
 from fastapi.testclient import TestClient
@@ -16,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from airflow_inbound_webhooks.app import build_app
+from airflow_inbound_webhooks.app import build_app, get_asset_change_arguments
 
 pytestmark = pytest.mark.usefixtures("clean_db")
 
@@ -303,3 +304,44 @@ def test_events_are_attributed_to_connection_team(mock_asset_manager, subscribe,
         assert post_github(TestClient(build_app())).status_code == 202
 
     assert mock_asset_manager.register_asset_change.call_args.kwargs["api_user_teams"] == expected_teams
+
+
+@pytest.fixture
+def fresh_asset_change_arguments():
+    get_asset_change_arguments.cache_clear()
+    yield
+    get_asset_change_arguments.cache_clear()
+
+
+@pytest.mark.usefixtures("fresh_asset_change_arguments")
+@mock.patch("airflow.assets.manager.asset_manager", autospec=True)
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_team_arguments_are_left_out_where_register_asset_change_lacks_them(
+    mock_asset_manager, client, subscribe
+):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    mock_asset_manager.register_asset_change.return_value.id = 1
+
+    def register_asset_change(cls, *, asset, extra, session, **kwargs): ...  # As in Airflow 3.1 and 3.2
+
+    with mock.patch.object(AssetManager, "register_asset_change", classmethod(register_asset_change)):
+        assert post_github(client).status_code == 202
+
+    assert mock_asset_manager.register_asset_change.call_args.kwargs.keys() == {"asset", "extra", "session"}
+
+
+@pytest.mark.usefixtures("fresh_asset_change_arguments")
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_delivery_fails_when_register_asset_change_no_longer_names_an_argument(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    # "extra" renamed: **kwargs would swallow it, and events would be stored without the payload.
+    def register_asset_change(cls, *, asset, session, **kwargs): ...
+
+    with (
+        mock.patch.object(AssetManager, "register_asset_change", classmethod(register_asset_change)),
+        pytest.raises(RuntimeError, match=r"no longer takes \['extra'\]"),
+    ):
+        post_github(client)
+
+    assert count_asset_events(session) == 0

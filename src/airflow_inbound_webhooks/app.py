@@ -25,15 +25,33 @@ log = logging.getLogger(__name__)
 CONN_ID_PREFIX = "webhook_"
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024
 WEBHOOK_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+# register_asset_change accepts and drops unknown keyword arguments, so an argument a later Airflow
+# renamed would be lost silently instead of failing. The team arguments only exist from Airflow 3.3.
+REQUIRED_ASSET_CHANGE_ARGUMENTS = frozenset({"asset", "extra", "session"})
+TEAM_ATTRIBUTION_ARGUMENTS = frozenset({"source_is_api", "api_user_teams"})
 
 
 @functools.cache
-def supports_team_attribution() -> bool:
-    # register_asset_change accepts and drops unknown keyword arguments, so passing api_user_teams to an
-    # asset manager without it (Airflow < 3.3) would silently lose team attribution instead of failing.
-    from airflow.assets.manager import asset_manager
+def get_asset_change_arguments() -> frozenset[str]:
+    """
+    Return the arguments ``register_asset_change`` names, failing if one the endpoint needs is gone.
 
-    return "api_user_teams" in inspect.signature(asset_manager.register_asset_change).parameters
+    This inspects the ``AssetManager`` Airflow ships rather than the configured ``asset_manager``, so a
+    ``[core] asset_manager_class`` that forwards ``**kwargs`` to it keeps working.
+    """
+    from airflow.assets.manager import AssetManager
+
+    named = frozenset(inspect.signature(AssetManager.register_asset_change).parameters)
+    if missing := REQUIRED_ASSET_CHANGE_ARGUMENTS - named:
+        raise RuntimeError(
+            f"AssetManager.register_asset_change no longer takes {sorted(missing)}; "
+            "this Airflow version is not supported"
+        )
+    return named
+
+
+def supports_team_attribution() -> bool:
+    return get_asset_change_arguments() >= TEAM_ATTRIBUTION_ARGUMENTS
 
 
 @dataclass(frozen=True)
@@ -136,6 +154,11 @@ def receive_webhook(
         "delivery_id": event.delivery_id,
         "payload": event.payload,
     }
+    team_arguments: dict[str, Any] = (
+        {"source_is_api": True, "api_user_teams": {webhook.team_name} if webhook.team_name else set()}
+        if supports_team_attribution()
+        else {}
+    )
     asset_events: dict[str, int] = {}
     # Leaving the block commits, so a delivery is only acknowledged once its events are stored.
     with create_session(scoped=False) as session:
@@ -144,11 +167,7 @@ def receive_webhook(
         ).all()
         for asset_model in subscribed:
             asset_event = asset_manager.register_asset_change(
-                asset=asset_model,
-                extra=extra,
-                source_is_api=True,
-                api_user_teams={webhook.team_name} if webhook.team_name else set(),
-                session=session,
+                asset=asset_model, extra=extra, session=session, **team_arguments
             )
             if asset_event is not None:
                 asset_events[asset_model.name] = asset_event.id
