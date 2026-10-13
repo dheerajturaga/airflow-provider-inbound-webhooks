@@ -100,11 +100,11 @@ def post_github(url: str, *, secret: str = SECRET) -> tuple[int, dict]:
 
 
 @pytest.fixture
-def github_connection(session):
-    def add_connection(**extra) -> None:
+def webhook_connection(session):
+    def add_connection(name: str, **extra) -> None:
         session.add(
             Connection(
-                conn_id="webhook_github", conn_type="generic", password=SECRET, extra=json.dumps(extra)
+                conn_id=f"webhook_{name}", conn_type="generic", password=SECRET, extra=json.dumps(extra)
             )
         )
         session.commit()
@@ -112,8 +112,8 @@ def github_connection(session):
     return add_connection
 
 
-def test_signed_delivery_queues_subscribed_dag(api_server_url, session, subscribe, github_connection):
-    github_connection()
+def test_signed_delivery_queues_subscribed_dag(api_server_url, session, subscribe, webhook_connection):
+    webhook_connection("github")
     subscribe("web_deploy_preview", ASSET_NAME)
 
     status, body = post_github(api_server_url)
@@ -123,8 +123,8 @@ def test_signed_delivery_queues_subscribed_dag(api_server_url, session, subscrib
     assert list(session.scalars(select(AssetDagRunQueue.target_dag_id))) == ["web_deploy_preview"]
 
 
-def test_wrong_secret_is_rejected(api_server_url, session, subscribe, github_connection):
-    github_connection()
+def test_wrong_secret_is_rejected(api_server_url, session, subscribe, webhook_connection):
+    webhook_connection("github")
     subscribe("web_deploy_preview", ASSET_NAME)
 
     status, body = post_github(api_server_url, secret="wrong")
@@ -133,10 +133,42 @@ def test_wrong_secret_is_rejected(api_server_url, session, subscribe, github_con
     assert list(session.scalars(select(AssetEvent.id))) == []
 
 
-def test_team_name_needs_team_attribution(api_server_url, subscribe, github_connection):
-    github_connection(team_name="team_a")
+def test_team_name_needs_team_attribution(api_server_url, subscribe, webhook_connection):
+    webhook_connection("github", team_name="team_a")
     subscribe("web_deploy_preview", ASSET_NAME)
 
     status, _ = post_github(api_server_url)
 
     assert status == (202 if SUPPORTS_TEAM_ATTRIBUTION else 503)
+
+
+def test_readme_quick_start(api_server_url, session, subscribe, webhook_connection):
+    webhook_connection(
+        "demo",
+        source_type="hmac_json",
+        signature_header="X-Signature",
+        event_field="event",
+        path_field="service",
+    )
+    subscribe("smoke_test_billing", "demo/billing/deployed")
+    script = Path(__file__).parents[1] / "examples" / "send_test_event.py"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--url",
+            f"{api_server_url}/webhooks/demo",
+            "--secret",
+            SECRET,
+            "--data",
+            json.dumps({"event": "deployed", "service": "billing"}),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '"status":"accepted"' in result.stdout
+    assert list(session.scalars(select(AssetDagRunQueue.target_dag_id))) == ["smoke_test_billing"]

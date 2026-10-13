@@ -24,7 +24,10 @@ classifiers = [
 dependencies = ["apache-airflow>=3.1.1"]
 
 [project.urls]
+Homepage = "https://github.com/dheerajturaga/airflow-provider-inbound-webhooks"
 Source = "https://github.com/dheerajturaga/airflow-provider-inbound-webhooks"
+Issues = "https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/issues"
+Changelog = "https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/blob/main/CHANGELOG.md"
 
 [project.entry-points."airflow.plugins"]
 webhooks = "airflow_inbound_webhooks.plugin:WebhooksPlugin"

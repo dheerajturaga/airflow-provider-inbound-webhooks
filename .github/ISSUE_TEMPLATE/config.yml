@@ -1,0 +1,8 @@
+# Copyright 2026 Dheeraj Turaga
+# SPDX-License-Identifier: Apache-2.0
+---
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/security/advisories/new
+    about: Report vulnerabilities privately, as described in SECURITY.md.

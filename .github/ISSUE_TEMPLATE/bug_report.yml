@@ -1,0 +1,51 @@
+# Copyright 2026 Dheeraj Turaga
+# SPDX-License-Identifier: Apache-2.0
+---
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Report security issues privately, as described in SECURITY.md, not here.
+        Never paste webhook secrets or connection passwords.
+  - type: input
+    id: airflow-version
+    attributes:
+      label: Airflow version
+      placeholder: "3.3.2"
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: source-type
+    attributes:
+      label: Source type
+      options: [hmac_json, token_header, github, gitlab, other or unsure]
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+      description: Include the HTTP status and response body of the delivery if you have them.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        The connection extra (without the password), the Dag's schedule, and the delivery's headers
+        and body, with secrets removed.
+  - type: textarea
+    id: logs
+    attributes:
+      label: API server log
+      render: text

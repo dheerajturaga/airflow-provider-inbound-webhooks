@@ -1,0 +1,21 @@
+# Copyright 2026 Dheeraj Turaga
+# SPDX-License-Identifier: Apache-2.0
+---
+name: Feature request
+description: A new source type, option or behaviour
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The service and the Dags you want it to trigger.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+      description: >
+        For a new service, link its webhook documentation: how it signs or authenticates
+        deliveries, and how its payload names events.
