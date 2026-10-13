@@ -14,7 +14,7 @@ from airflow.api_fastapi.common.db.common import SessionDep
 from airflow.assets.manager import asset_manager
 from airflow.exceptions import AirflowNotFoundException
 from airflow.models.asset import AssetModel
-from airflow.models.connection import Connection
+from airflow.sdk import Connection
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from sqlalchemy import select
 
@@ -45,12 +45,15 @@ def get_configured_webhook(name: str) -> ConfiguredWebhook:
 
     The password is the shared secret. The extra may set ``source_type`` (defaults to ``<name>``,
     so ``webhook_github`` needs nothing else), source options, ``team_name`` and ``max_body_bytes``.
+
+    Connections stored in the metadata database resolve only because ``airflow api-server`` runs as a
+    server context; environment variables and external secrets backends resolve in any process.
     """
     if not WEBHOOK_NAME_PATTERN.fullmatch(name):
         raise HTTPException(HTTPStatus.NOT_FOUND, "Unknown webhook")
     conn_id = f"{CONN_ID_PREFIX}{name}"
     try:
-        conn = Connection.get_connection_from_secrets(conn_id)
+        conn = Connection.get(conn_id)
     except AirflowNotFoundException:
         raise HTTPException(HTTPStatus.NOT_FOUND, "Unknown webhook") from None
     extra = conn.extra_dejson

@@ -18,6 +18,7 @@ from airflow.models.asset import (
     AssetModel,
     DagScheduleAssetReference,
 )
+from airflow.models.connection import Connection as ConnectionModel
 from airflow.models.dag import DagModel
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -26,7 +27,12 @@ from airflow_inbound_webhooks.app import build_app
 from airflow_inbound_webhooks.plugin import WebhooksPlugin
 
 from tests_common.test_utils.config import conf_vars
-from tests_common.test_utils.db import clear_db_assets, clear_db_dags, clear_db_runs
+from tests_common.test_utils.db import (
+    clear_db_assets,
+    clear_db_connections,
+    clear_db_dags,
+    clear_db_runs,
+)
 
 pytestmark = pytest.mark.db_test
 
@@ -223,6 +229,28 @@ def test_token_header_service_configured_from_connection_extra(client, session, 
     assert response.status_code == 202
     assert response.json()["candidates"] == ["huggingface/update"]
     assert get_queued_dag_ids(session) == {"evaluate_model"}
+
+
+@pytest.fixture
+def clean_connections():
+    clear_db_connections(add_default_connections_back=False)
+    yield
+    clear_db_connections(add_default_connections_back=False)
+
+
+@pytest.mark.usefixtures("clean_connections")
+@pytest.mark.parametrize(
+    ("process_context", "expected_status"),
+    [pytest.param("server", 202, id="api-server"), pytest.param("client", 404, id="other-process")],
+)
+def test_connection_stored_in_metadata_db(client, session, process_context, expected_status):
+    session.add(ConnectionModel(conn_id="webhook_github", conn_type="generic", password=SECRET))
+    session.commit()
+
+    with mock.patch.dict(os.environ, {"_AIRFLOW_PROCESS_CONTEXT": process_context}):
+        response = post_github(client)
+
+    assert response.status_code == expected_status
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)

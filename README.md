@@ -18,8 +18,11 @@ release is 3.3.x. Next steps:
 
 1. A standalone test setup. The tests still use fixtures from Airflow's `tests_common`, so they run
    inside Airflow's Breeze (see "Run the tests").
-2. Decide the minimum Airflow version. Before 3.4, asset events are batched by default, so a run can
-   carry several deliveries.
+2. Set the minimum Airflow version, likely 3.1.1. Webhook connections are read through the public
+   `airflow.sdk.Connection`, which only reads connections stored in the metadata database inside the
+   API server from 3.1.1 (3.0.x and 3.1.0 answer every delivery with a 500); connections in
+   environment variables or an external secrets backend work from 3.0. Before 3.4, asset events are
+   batched by default, so a run can carry several deliveries.
 3. CI on GitHub Actions running the static checks and tests, plus mypy and zizmor (see "Development").
 4. Provider metadata: a `webhook` connection type with form fields instead of JSON in the extra.
 
