@@ -42,7 +42,7 @@ values from the extra before reading it.
 
 | Dependency | Why | Risk |
 |---|---|---|
-| `airflow.assets.manager.asset_manager.register_asset_change` | Records the asset event and queues Dags exactly as Airflow does | Its signature changed in 3.2 and 3.3. It accepts and drops unknown keyword arguments, so `SUPPORTS_TEAM_ATTRIBUTION` checks for `api_user_teams` instead of passing it blindly. A deployment can replace the manager with `[core] asset_manager_class`. |
+| `airflow.assets.manager.asset_manager.register_asset_change` | Records the asset event and queues Dags exactly as Airflow does | Its signature changed in 3.2 and 3.3. It accepts and drops unknown keyword arguments, so `supports_team_attribution()` checks for `api_user_teams` instead of passing it blindly. A deployment can replace the manager with `[core] asset_manager_class`. |
 | `airflow.models.asset.AssetModel` | Finds which candidate names are active assets | Database models are internal; a relationship was renamed in 3.1 |
 | `airflow.utils.session.create_session` | A database session the endpoint commits before it responds | Same signature in every supported version. It is what the API server's own `SessionDep` wraps; `SessionDep` is marked private and commits in dependency cleanup, whose timing depends on FastAPI (Airflow pins it with `scope="function"` from 3.2). |
 | Plugin apps are mounted without authentication | The endpoint must accept services that cannot log in | If Airflow ever required login for plugin apps, every delivery would be rejected |
@@ -67,7 +67,11 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
 2. **Cost of unauthenticated requests.** Any `/webhooks/<name>` request triggers a connection lookup
    before it can be rejected, which may hit a remote secrets backend. Cache lookups, or list the
    enabled names in configuration?
-3. **Plugin import weight.** Every Airflow component that loads plugins imports the FastAPI app.
+3. **Plugin import weight.** Every Airflow component that loads plugins, including each task run,
+   imports the plugin. The endpoint's Airflow internals are imported on the first delivery, so
+   other components only pay for FastAPI and building the app, about 70 ms on Airflow 3.3. Avoiding
+   that too would mean giving Airflow a lazily built app rather than the FastAPI app `fastapi_apps`
+   is documented to take.
 4. **Payload retention.** Each recorded asset event stores the full payload. Should source types
    store a summary?
 5. **Audit.** The REST API writes an action log entry per user; a delivery has no user.

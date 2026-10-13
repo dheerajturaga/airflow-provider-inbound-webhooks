@@ -32,7 +32,7 @@ from airflow.models.connection import Connection
 from packaging.version import Version
 from sqlalchemy import select
 
-from airflow_inbound_webhooks.app import SUPPORTS_TEAM_ATTRIBUTION
+from airflow_inbound_webhooks.app import supports_team_attribution
 from airflow_inbound_webhooks.connection_form import CONN_TYPE, FIELDS, HOOK_NAME
 
 pytestmark = pytest.mark.usefixtures("clean_db")
@@ -149,7 +149,7 @@ def test_team_name_needs_team_attribution(api_server_url, subscribe, webhook_con
 
     status, _ = post_github(api_server_url)
 
-    assert status == (202 if SUPPORTS_TEAM_ATTRIBUTION else 503)
+    assert status == (202 if supports_team_attribution() else 503)
 
 
 def request_json(

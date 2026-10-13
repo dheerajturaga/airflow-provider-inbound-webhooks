@@ -280,24 +280,26 @@ def test_delivery_is_not_acknowledged_when_its_events_are_not_stored(session, su
     assert count_asset_events(session) == 0
 
 
-@mock.patch("airflow_inbound_webhooks.app.SUPPORTS_TEAM_ATTRIBUTION", False)
 @mock.patch.dict(os.environ, build_conn_env("github", team_name="team_a"))
 def test_team_name_rejected_when_asset_manager_cannot_attribute_teams(client, session):
-    response = post_github(client)
+    with mock.patch("airflow_inbound_webhooks.app.supports_team_attribution", return_value=False):
+        response = post_github(client)
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Webhook is misconfigured"}
     assert count_asset_events(session) == 0
 
 
-@mock.patch("airflow_inbound_webhooks.app.SUPPORTS_TEAM_ATTRIBUTION", True)
-@mock.patch("airflow_inbound_webhooks.app.asset_manager", autospec=True)
+@mock.patch("airflow.assets.manager.asset_manager", autospec=True)
 @pytest.mark.parametrize(("team_name", "expected_teams"), [(None, set()), ("team_a", {"team_a"})])
 def test_events_are_attributed_to_connection_team(mock_asset_manager, subscribe, team_name, expected_teams):
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
     mock_asset_manager.register_asset_change.return_value.id = 1
 
-    with mock.patch.dict(os.environ, build_conn_env("github", team_name=team_name)):
+    with (
+        mock.patch("airflow_inbound_webhooks.app.supports_team_attribution", return_value=True),
+        mock.patch.dict(os.environ, build_conn_env("github", team_name=team_name)),
+    ):
         assert post_github(TestClient(build_app())).status_code == 202
 
     assert mock_asset_manager.register_asset_change.call_args.kwargs["api_user_teams"] == expected_teams

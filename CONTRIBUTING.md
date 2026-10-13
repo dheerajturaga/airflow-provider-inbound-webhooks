@@ -39,6 +39,7 @@ database. They are organised as:
 | `tests/test_naming.py` | The event naming rule |
 | `tests/test_app.py` | The endpoint, in process: routing, responses, connection handling |
 | `tests/test_api_server.py` | The real `airflow api-server` with the installed plugin, over HTTP, including the README quick start |
+| `tests/test_plugin.py` | That importing the plugin, which every Airflow process does, leaves the endpoint's Airflow internals unimported |
 | `tests/test_examples.py` | That every example Dag file builds against the installed Airflow |
 | `tests/test_provider_info.py` | That the provider metadata conforms to the installed Airflow's schema |
 

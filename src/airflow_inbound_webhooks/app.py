@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import functools
 import inspect
 import logging
 import re
@@ -11,11 +12,8 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Annotated, Any
 
-from airflow.assets.manager import asset_manager
 from airflow.exceptions import AirflowNotFoundException
-from airflow.models.asset import AssetModel
 from airflow.sdk import Connection
-from airflow.utils.session import create_session
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from sqlalchemy import select
 
@@ -27,11 +25,15 @@ log = logging.getLogger(__name__)
 CONN_ID_PREFIX = "webhook_"
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024
 WEBHOOK_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
-# register_asset_change accepts and drops unknown keyword arguments, so passing api_user_teams to an
-# asset manager without it (Airflow < 3.3) would silently lose team attribution instead of failing.
-SUPPORTS_TEAM_ATTRIBUTION = (
-    "api_user_teams" in inspect.signature(asset_manager.register_asset_change).parameters
-)
+
+
+@functools.cache
+def supports_team_attribution() -> bool:
+    # register_asset_change accepts and drops unknown keyword arguments, so passing api_user_teams to an
+    # asset manager without it (Airflow < 3.3) would silently lose team attribution instead of failing.
+    from airflow.assets.manager import asset_manager
+
+    return "api_user_teams" in inspect.signature(asset_manager.register_asset_change).parameters
 
 
 @dataclass(frozen=True)
@@ -70,7 +72,7 @@ def get_configured_webhook(name: str) -> ConfiguredWebhook:
             raise ValueError(f"unknown source_type {source_type!r}; expected one of {sorted(SOURCE_TYPES)}")
         if not conn.password:
             raise ValueError("the password, which holds the shared secret, is empty")
-        if extra.get("team_name") and not SUPPORTS_TEAM_ATTRIBUTION:
+        if extra.get("team_name") and not supports_team_attribution():
             raise ValueError("team_name needs Airflow 3.3 or later to attribute events to a team")
         return ConfiguredWebhook(
             name=name,
@@ -111,6 +113,12 @@ def receive_webhook(
     webhook: WebhookDep,
     body: Annotated[bytes, Depends(read_limited_body)],
 ) -> dict[str, Any]:
+    # Imported here rather than at module level: Airflow imports plugins in every process, including
+    # each task run, and only the API server needs these.
+    from airflow.assets.manager import asset_manager
+    from airflow.models.asset import AssetModel
+    from airflow.utils.session import create_session
+
     try:
         webhook.source.verify(request.headers, body, webhook.secret)
     except WebhookVerificationError as e:
