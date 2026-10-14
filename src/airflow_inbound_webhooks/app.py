@@ -113,8 +113,9 @@ def resolve_webhook(name: str) -> ConfiguredWebhook:
 
 # Each listed webhook's resolution, or the HTTPException it raised, with its time.monotonic() expiry.
 resolved_webhooks: dict[str, tuple[float, ConfiguredWebhook | HTTPException]] = {}
-# Held while resolving, so the requests that find an entry expired make one lookup, not one each.
-resolve_lock = threading.Lock()
+# One per listed webhook, held while resolving it, so the requests that find its entry expired make one
+# lookup, not one each, and a slow lookup holds up only its own webhook. Only listed names get one.
+resolve_locks: dict[str, threading.Lock] = {}
 
 
 def get_webhook_names() -> frozenset[str]:
@@ -165,7 +166,8 @@ def get_configured_webhook(name: str) -> ConfiguredWebhook:
     if ttl <= 0:
         return resolve_webhook(name)
     if (resolution := get_cached_resolution(name)) is None:
-        with resolve_lock:
+        # setdefault is atomic, so concurrent first requests for a name share one lock.
+        with resolve_locks.setdefault(name, threading.Lock()):
             if (resolution := get_cached_resolution(name)) is None:
                 try:
                     resolution = resolve_webhook(name)
@@ -199,6 +201,9 @@ async def read_limited_body(request: Request, webhook: WebhookDep) -> bytes:
 router = APIRouter()
 
 
+# Also with a trailing slash: otherwise the router answers it with a redirect, which senders such as
+# GitHub do not follow, so a URL pasted with a slash would fail every delivery.
+@router.post("/{name}/", status_code=HTTPStatus.ACCEPTED)
 @router.post("/{name}", status_code=HTTPStatus.ACCEPTED)
 def receive_webhook(
     request: Request,
@@ -256,6 +261,8 @@ def receive_webhook(
 
 
 def build_app() -> FastAPI:
-    app = FastAPI(title="Airflow webhooks")
+    # Airflow mounts plugin apps without authentication, so FastAPI's interactive docs and OpenAPI
+    # schema would be served to anyone; only POST /webhooks/<name> should be.
+    app = FastAPI(title="Airflow webhooks", docs_url=None, redoc_url=None, openapi_url=None)
     app.include_router(router)
     return app

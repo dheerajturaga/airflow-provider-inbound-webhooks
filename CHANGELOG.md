@@ -1,12 +1,14 @@
 # Changelog
 
 All notable changes are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project will use
-[Semantic Versioning](https://semver.org/) from its first release, for the public interfaces that
-"Versioning" in the README lists. A change to the event names that existing deliveries produce is a
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
+[Semantic Versioning](https://semver.org/) for the public interfaces that "Versioning" in the README
+lists. A change to the event names that existing deliveries produce is a
 breaking change, listed under "Changed event names" with the old and new names.
 
 ## Unreleased
+
+## 0.1.0 - 2026-10-14
 
 ### Added
 
@@ -29,6 +31,7 @@ breaking change, listed under "Changed event names" with the old and new names.
   the offered names as `candidates`. Names are folded to ASCII, and parts left empty are dropped.
 - Multi-team attribution through `team_name` on Airflow 3.3 and later.
 - The "Inbound Webhook" connection type, with a form in the Airflow UI for every source type option.
-- A quick start with `examples/send_test_event.py` and example Dags.
+- A quick start, with a test sender, `python -m airflow_inbound_webhooks.send_test_event`, and
+  example Dags.
 - Support for Airflow 3.1.1 and later, on Python 3.10 to 3.13 (3.14 from Airflow 3.2), with a SQLite,
   PostgreSQL or MySQL metadata database.

@@ -72,8 +72,10 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
 ## Open questions
 
 1. **Replay protection.** GitHub signs the body but not a timestamp; GitLab sends a bare token.
-   Deduplicating on the delivery ID needs a store; source types whose signature covers a timestamp
-   could reject old deliveries. Jira's does, through the `timestamp` in the signed body, but Jira
+   Deduplicating on the delivery ID needs a store, and would only catch a service's own retries:
+   GitHub's `X-GitHub-Delivery` and GitLab's `X-Gitlab-Event-UUID` are headers no signature covers,
+   so a deliberate replay can change them, and the event headers along with them. Source types
+   whose signature covers a timestamp could reject old deliveries. Jira's does, through the `timestamp` in the signed body, but Jira
    Cloud retries a failed delivery for more than an hour, so the window would have to be as long.
 2. **Probing webhook names.** `webhook_names` and the connection cache bound what unauthenticated
    requests cost: an unlisted name is refused before any lookup, and each API server worker reads a
