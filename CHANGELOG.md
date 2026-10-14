@@ -13,6 +13,10 @@ All notable changes are documented here. The format follows
   schedule on.
 - Configuration through one `webhook_<name>` connection per webhook: the password is the shared
   secret, and the extra selects and configures the source type.
+- `[inbound_webhooks] webhook_names`, the names of the webhooks the endpoint serves. Requests for
+  any other name are refused without reading a connection; while it is unset, no webhook is served.
+- `[inbound_webhooks] connection_cache_ttl`: each listed webhook's connection is read at most once a
+  minute by default, so unauthenticated requests cannot each cost a call to a secrets backend.
 - Source types `hmac_json` (HMAC-SHA256 body signatures, hex or base64), `token_header` (shared
   secret in a header), `github` and `gitlab`.
 - Source type `jira`, for Jira Cloud and Data Center webhooks with a secret. It names events after

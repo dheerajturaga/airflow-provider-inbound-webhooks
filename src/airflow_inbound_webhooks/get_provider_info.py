@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from airflow_inbound_webhooks import connection_form
+from airflow_inbound_webhooks import configuration, connection_form
 
 
 def get_provider_info() -> dict[str, Any]:
@@ -26,4 +26,5 @@ def get_provider_info() -> dict[str, Any]:
                 },
             }
         ],
+        "config": configuration.build_config_section(),
     }

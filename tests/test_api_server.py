@@ -62,6 +62,12 @@ def api_server_url():
     port = find_free_port()
     url = f"http://127.0.0.1:{port}"
     log_path = Path(os.environ["AIRFLOW_HOME"]) / "api-server.log"
+    env = {
+        **os.environ,
+        "AIRFLOW__INBOUND_WEBHOOKS__WEBHOOK_NAMES": "github,demo",
+        # Tests change a webhook's connection between deliveries, so it must be read on each.
+        "AIRFLOW__INBOUND_WEBHOOKS__CONNECTION_CACHE_TTL": "0",
+    }
     with log_path.open("w") as log:
         # Its own process group, so stopping it also stops the uvicorn workers it starts.
         server = subprocess.Popen(
@@ -69,6 +75,7 @@ def api_server_url():
             stdout=log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=env,
         )
     try:
         deadline = time.monotonic() + 120
@@ -165,6 +172,14 @@ def request_json(
             return response.status, json.load(response)
     except urllib.error.HTTPError as e:
         return e.code, json.load(e)
+
+
+def test_unlisted_webhook_is_unknown(api_server_url, webhook_connection):
+    webhook_connection("gitlab")
+
+    status, body = request_json(f"{api_server_url}/webhooks/gitlab", method="POST", body={})
+
+    assert (status, body) == (404, {"detail": "Unknown webhook"})
 
 
 @pytest.fixture(scope="module")

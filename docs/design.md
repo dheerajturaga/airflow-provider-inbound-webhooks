@@ -7,9 +7,11 @@ documentation is in the [README](../README.md).
 
 1. `POST /webhooks/<name>` reaches the plugin's FastAPI app, mounted by the API server under
    `/webhooks` without Airflow authentication.
-2. The connection `webhook_<name>` is read through `airflow.sdk.Connection`. Its password is the
-   shared secret; its extra selects the source type and its options. A missing connection is a
-   `404`, an invalid one a `503`.
+2. A name that `[inbound_webhooks] webhook_names` does not list is a `404` before anything is read.
+   Otherwise the connection `webhook_<name>` is read through `airflow.sdk.Connection`, and the
+   result, a missing or invalid connection included, is reused for `connection_cache_ttl` seconds.
+   Its password is the shared secret; its extra selects the source type and its options. A missing
+   connection is a `404`, an invalid one a `503`.
 3. The body is read up to `max_body_bytes`.
 4. The source type verifies the signature or token, then parses the delivery into a path and kinds.
 5. `naming.build_candidate_names` turns those into every subscribable name.
@@ -38,6 +40,13 @@ Airflow builds connection forms differently across the supported versions, so
 The form saves every field, with `null` for those left empty, so the endpoint drops `null` and `""`
 values from the extra before reading it.
 
+## Configuration options
+
+`configuration.py` defines the `[inbound_webhooks]` options once. The provider metadata declares
+them under `config`, so `airflow config list` and `airflow config get-value` know their defaults, and
+the endpoint reads them with the same defaults as fallbacks, so it does not depend on the process
+having loaded provider configuration.
+
 ## Airflow internals the plugin uses
 
 | Dependency | Why | Risk |
@@ -45,6 +54,7 @@ values from the extra before reading it.
 | `airflow.assets.manager.asset_manager.register_asset_change` | Records the asset event and queues Dags exactly as Airflow does | Its signature changed in 3.2 and 3.3, and it accepts and drops unknown keyword arguments, so a renamed argument would be lost silently. The endpoint inspects `AssetManager.register_asset_change`: deliveries fail with a `500` if `asset`, `extra` or `session` is no longer a named parameter, and `source_is_api` and `api_user_teams` are passed only where they are (3.3 and later). A deployment can replace the manager with `[core] asset_manager_class`; the check reads Airflow's own class, so a replacement that forwards `**kwargs` still works. |
 | `airflow.models.asset.AssetModel` | Finds which candidate names are active assets | Database models are internal; a relationship was renamed in 3.1 |
 | `airflow.utils.session.create_session` | A database session the endpoint commits before it responds | Same signature in every supported version. It is what the API server's own `SessionDep` wraps; `SessionDep` is marked private and commits in dependency cleanup, whose timing depends on FastAPI (Airflow pins it with `scope="function"` from 3.2). |
+| `airflow.configuration.conf` | Reads the `[inbound_webhooks]` options | How every Airflow component reads its configuration, with the same `get` and `getint` in every supported version. `airflow.sdk.conf` is the Task SDK's parser and only exists from 3.2. |
 | Plugin apps are mounted without authentication | The endpoint must accept services that cannot log in | If Airflow ever required login for plugin apps, every delivery would be rejected |
 
 Public interfaces used: `AirflowPlugin` with `fastapi_apps` and the `airflow.plugins` entry point,
@@ -65,9 +75,14 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
    Deduplicating on the delivery ID needs a store; source types whose signature covers a timestamp
    could reject old deliveries. Jira's does, through the `timestamp` in the signed body, but Jira
    Cloud retries a failed delivery for more than an hour, so the window would have to be as long.
-2. **Cost of unauthenticated requests.** Any `/webhooks/<name>` request triggers a connection lookup
-   before it can be rejected, which may hit a remote secrets backend. Cache lookups, or list the
-   enabled names in configuration?
+2. **Probing webhook names.** `webhook_names` and the connection cache bound what unauthenticated
+   requests cost: an unlisted name is refused before any lookup, and each API server worker reads a
+   listed webhook's connection at most once per `connection_cache_ttl`, even when the lookup or the
+   verification fails. With `*` nothing is cached, because the cache would keep an entry for
+   every name anyone sends. A listed name still answers a bad signature with `401` rather than
+   `404`, so which names are served can be probed. That is kept because the `404` is the main
+   troubleshooting signal and names such as `github` are easy to guess; the secret is what protects
+   a webhook. Should unlisted and unverified requests get the same answer?
 3. **Plugin import weight.** Every Airflow component that loads plugins, including each task run,
    imports the plugin. The endpoint's Airflow internals are imported on the first delivery, so
    other components only pay for FastAPI and building the app, about 70 ms on Airflow 3.3. Avoiding

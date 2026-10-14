@@ -25,6 +25,8 @@ os.environ.update(
         "AIRFLOW__CORE__AUTH_MANAGER": (
             "airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager"
         ),
+        # Serve any webhook name, so each test can use the ones it needs; allowlist tests override it.
+        "AIRFLOW__INBOUND_WEBHOOKS__WEBHOOK_NAMES": "*",
     }
 )
 

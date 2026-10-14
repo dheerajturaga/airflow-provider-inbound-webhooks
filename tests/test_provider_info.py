@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from importlib.metadata import metadata
 from importlib.resources import files
 
@@ -23,3 +25,15 @@ def test_package_name_matches_the_distribution():
     distribution_name = canonicalize_name(metadata("airflow-provider-inbound-webhooks")["Name"])
 
     assert get_provider_info()["package-name"] == distribution_name
+
+
+def test_configuration_options_are_registered():
+    # The default can only come from the provider metadata: the test environment sets no value.
+    result = subprocess.run(
+        [sys.executable, "-m", "airflow", "config", "get-value", "inbound_webhooks", "connection_cache_ttl"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "60"

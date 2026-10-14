@@ -8,15 +8,19 @@ import functools
 import inspect
 import logging
 import re
+import threading
+import time
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Annotated, Any
 
+from airflow.configuration import conf
 from airflow.exceptions import AirflowNotFoundException
 from airflow.sdk import Connection
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from sqlalchemy import select
 
+from airflow_inbound_webhooks import configuration
 from airflow_inbound_webhooks.naming import build_candidate_names
 from airflow_inbound_webhooks.sources import SOURCE_TYPES, WebhookSource, WebhookVerificationError
 
@@ -65,7 +69,7 @@ class ConfiguredWebhook:
     max_body_bytes: int
 
 
-def get_configured_webhook(name: str) -> ConfiguredWebhook:
+def resolve_webhook(name: str) -> ConfiguredWebhook:
     """
     Resolve ``POST /webhooks/<name>`` from connection ``webhook_<name>``.
 
@@ -102,6 +106,73 @@ def get_configured_webhook(name: str) -> ConfiguredWebhook:
     except ValueError as e:
         log.error("Webhook connection %s is misconfigured: %s", conn_id, e)
         raise HTTPException(HTTPStatus.SERVICE_UNAVAILABLE, "Webhook is misconfigured") from e
+
+
+# Each listed webhook's resolution, or the HTTPException it raised, with its time.monotonic() expiry.
+resolved_webhooks: dict[str, tuple[float, ConfiguredWebhook | HTTPException]] = {}
+# Held while resolving, so the requests that find an entry expired make one lookup, not one each.
+resolve_lock = threading.Lock()
+
+
+def get_webhook_names() -> frozenset[str]:
+    value = conf.get(configuration.SECTION, configuration.WEBHOOK_NAMES, fallback="")
+    return frozenset(filter(None, (name.strip() for name in value.split(","))))
+
+
+@functools.cache
+def warn_no_webhook_names() -> None:
+    # Once per process: logging every refused request would let anyone flood the log.
+    log.warning(
+        "[%s] %s is not set, so no webhook is served; list the webhook names to serve",
+        configuration.SECTION,
+        configuration.WEBHOOK_NAMES,
+    )
+
+
+def get_cached_resolution(name: str) -> ConfiguredWebhook | HTTPException | None:
+    expires_at, resolution = resolved_webhooks.get(name, (0.0, None))
+    return resolution if time.monotonic() < expires_at else None
+
+
+def get_configured_webhook(name: str) -> ConfiguredWebhook:
+    """
+    Resolve ``POST /webhooks/<name>``, reading its connection at most once per cache TTL.
+
+    Requests are unauthenticated, so a name not in ``webhook_names`` is refused without a lookup, and
+    neither a failed lookup nor a failed verification reads the connection again before the TTL is
+    up. Otherwise anyone could make every request cost a call to the secrets backend.
+    """
+    names = get_webhook_names()
+    if configuration.ANY_WEBHOOK_NAME in names:
+        # Any name can be looked up, so a cache would keep an entry for every name anyone sends.
+        return resolve_webhook(name)
+    if name not in names:
+        if not names:
+            warn_no_webhook_names()
+        # Debug only, and repr: anyone can send any name.
+        log.debug(
+            "Refused webhook %r: not in [%s] %s", name, configuration.SECTION, configuration.WEBHOOK_NAMES
+        )
+        raise HTTPException(HTTPStatus.NOT_FOUND, "Unknown webhook")
+    ttl = conf.getint(
+        configuration.SECTION,
+        configuration.CONNECTION_CACHE_TTL,
+        fallback=configuration.DEFAULT_CONNECTION_CACHE_TTL,
+    )
+    if ttl <= 0:
+        return resolve_webhook(name)
+    if (resolution := get_cached_resolution(name)) is None:
+        with resolve_lock:
+            if (resolution := get_cached_resolution(name)) is None:
+                try:
+                    resolution = resolve_webhook(name)
+                except HTTPException as e:
+                    resolution = e
+                resolved_webhooks[name] = (time.monotonic() + ttl, resolution)
+    if isinstance(resolution, HTTPException):
+        # A new exception each time: raising the cached one again would grow its traceback.
+        raise HTTPException(resolution.status_code, resolution.detail)
+    return resolution
 
 
 WebhookDep = Annotated[ConfiguredWebhook, Depends(get_configured_webhook)]
