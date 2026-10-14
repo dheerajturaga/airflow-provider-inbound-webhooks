@@ -36,11 +36,198 @@ wait.
 This plugin adds the missing piece: an endpoint on the Airflow API server that verifies each
 service's signature and records the delivery as an asset event.
 
+## Quick start
+
+Try it with the bundled test sender, so no third-party account is needed. Run these commands on the
+machine running the Airflow API server (Airflow 3.1.1 or later).
+
+1. **Install the plugin**, then restart the API server. Until the first PyPI release, install from a
+   clone:
+
+   ```bash
+   git clone https://github.com/dheerajturaga/airflow-provider-inbound-webhooks
+   pip install ./airflow-provider-inbound-webhooks "apache-airflow==$(airflow version)"
+   ```
+
+   Pinning `apache-airflow` to the version you run keeps pip from changing it. After the restart,
+   `airflow plugins` lists `webhooks`.
+
+2. **Create the webhook.** It is a connection, named `webhook_demo` for the URL `/webhooks/demo`:
+
+   ```bash
+   airflow connections add webhook_demo --conn-type inbound_webhook --conn-password 'change-me' \
+     --conn-extra '{"source_type": "hmac_json", "signature_header": "X-Signature",
+                    "event_field": "event", "path_field": "service"}'
+   ```
+
+   <details>
+   <summary>Or in the Airflow UI</summary>
+
+   Under Admin → Connections, add a connection of type **Inbound Webhook**:
+
+   | Field | Value |
+   |---|---|
+   | Connection Id | `webhook_demo` |
+   | Shared secret | `change-me` |
+   | Source type | `hmac_json` |
+   | Signature header | `X-Signature` |
+   | Event field | `event` |
+   | Path field | `service` |
+
+   </details>
+
+3. **Add a Dag** that runs on the event, and unpause it, since new Dags start paused:
+
+   ```bash
+   cp airflow-provider-inbound-webhooks/examples/dags/quickstart.py "$(airflow config get-value core dags_folder)"
+   airflow dags reserialize  # parse it now rather than at the next scan of the Dags folder
+   airflow dags unpause smoke_test_billing
+   ```
+
+4. **Send a signed test delivery:**
+
+   ```bash
+   python airflow-provider-inbound-webhooks/examples/send_test_event.py \
+     --url http://localhost:8080/webhooks/demo --secret 'change-me' \
+     --data '{"event": "deployed", "service": "billing"}'
+   ```
+
+   It prints the response, and `smoke_test_billing` starts a run:
+
+   ```text
+   HTTP 202
+   {"status":"accepted","asset_events":{"demo/billing/deployed":1},"candidates":["demo/billing/deployed","demo/*/deployed"]}
+   ```
+
+   Anything else? See [Responses and troubleshooting](#responses-and-troubleshooting).
+
+Connections are read on every delivery, so adding or changing a webhook later needs no restart.
+
+## Connect GitHub, GitLab or Jira
+
+Every service takes the same steps: in Airflow, create a connection holding a secret; in the service,
+add a webhook with that secret; then, in Airflow, schedule a Dag on one of its events.
+
+Before you start:
+
+- The plugin is installed on the API server: [Quick start](#quick-start), step 1.
+- The service can reach the API server. GitHub.com, GitLab.com and Jira Cloud need a public HTTPS
+  address: put a reverse proxy in front of the API server that forwards only `/webhooks/*` (see
+  [Security](#security)). `<your-airflow>` below stands for that address.
+
+### Connect GitHub
+
+**In Airflow**
+
+1. Create the connection `webhook_github` with a new secret, and copy the secret it prints:
+
+   ```bash
+   SECRET="$(openssl rand -hex 32)" && echo "$SECRET"
+   airflow connections add webhook_github --conn-type inbound_webhook --conn-password "$SECRET"
+   ```
+
+**In GitHub**
+
+2. In the repository, open **Settings → Webhooks → Add webhook**. To cover every repository of an
+   organization, use the organization's **Settings → Webhooks** instead, as an organization owner.
+
+3. Fill in the form, then select **Add webhook**:
+
+   | Field | Value |
+   |---|---|
+   | Payload URL | `https://<your-airflow>/webhooks/github` |
+   | Content type | `application/json`. The default, `application/x-www-form-urlencoded`, is refused. |
+   | Secret | The secret from step 1 |
+   | Which events would you like to trigger this webhook? | **Let me select individual events**, then the ones your Dags need, such as *Pull requests* or *Pushes* |
+   | Active | Checked |
+
+4. Check it. GitHub sends a `ping` right away: on the webhook's **Recent Deliveries** tab it should
+   have a green check, and its response should be `202` with `"status":"no_subscribers"`.
+
+**In Airflow**
+
+5. Add a Dag that schedules on an event, such as
+   `Asset("github/my-org/web/pull_request/labeled/deploy-preview")`, and unpause it. To find a name,
+   trigger the event once and copy one of the `candidates` from its response under **Recent
+   Deliveries**, or see [Event names](#event-names).
+
+### Connect GitLab
+
+**In Airflow**
+
+1. Create the connection `webhook_gitlab` with a new secret, and copy the secret it prints:
+
+   ```bash
+   SECRET="$(openssl rand -hex 32)" && echo "$SECRET"
+   airflow connections add webhook_gitlab --conn-type inbound_webhook --conn-password "$SECRET"
+   ```
+
+**In GitLab**
+
+2. In the project, open **Settings → Webhooks → Add new webhook**. To cover every project of a group,
+   use the group's **Settings → Webhooks** instead, as a group owner (GitLab Premium).
+
+3. Fill in the form, then select **Add webhook**:
+
+   | Field | Value |
+   |---|---|
+   | URL | `https://<your-airflow>/webhooks/gitlab` |
+   | Secret token | The secret from step 1. GitLab also offers a *Signing token*, which this plugin does not check yet; you can set both. |
+   | Trigger | The events your Dags need, such as *Push events*, *Merge request events* or *Pipeline events* |
+   | Enable SSL verification | Checked |
+
+4. Check it. In the list of webhooks, select **Test → Push events**. GitLab should report `HTTP 202`;
+   **Edit → Recent events → View details** shows the response.
+
+**In Airflow**
+
+5. Add a Dag that schedules on an event, such as `Asset("gitlab/platform/api/pipeline/success")`, and
+   unpause it. To find a name, trigger the event once and copy one of the `candidates` from its
+   response under **Recent events**, or see [Event names](#event-names).
+
+### Connect Jira
+
+**In Airflow**
+
+1. Create the connection `webhook_jira` with a new secret, and copy the secret it prints:
+
+   ```bash
+   SECRET="$(openssl rand -hex 32)" && echo "$SECRET"
+   airflow connections add webhook_jira --conn-type inbound_webhook --conn-password "$SECRET"
+   ```
+
+**In Jira**, as a Jira administrator
+
+2. Open **Settings (⚙) → System → WebHooks → Create a WebHook**. On Jira Data Center, the menu is
+   **Administration (⚙) → System → WebHooks**.
+
+3. Fill in the form, then create the webhook:
+
+   | Field | Value |
+   |---|---|
+   | Name | Any, such as `Airflow` |
+   | Status | Enabled |
+   | URL | `https://<your-airflow>/webhooks/jira` |
+   | Secret | The secret from step 1. Jira cannot show it again once saved. |
+   | Issue related events | A JQL filter such as `project = OPS`, and the events your Dags need, such as issue *created* and *updated* |
+   | Exclude body | Unchecked |
+
+**In Airflow**
+
+4. Add a Dag that schedules on an event, such as
+   `Asset("jira/OPS/issue_updated/status/Ready for Deploy")`, and unpause it. See [`jira`](#jira) for
+   the names Jira events get.
+
+5. Check it by making that change in Jira, here moving an `OPS` issue to *Ready for Deploy*: the Dag
+   starts a run. Jira does not show webhook responses, so if nothing happens, check the API server
+   log: it reports a delivery whose secret does not match, or a misconfigured connection. Otherwise
+   check that *Exclude body* is unchecked and that the Dag is unpaused.
+
 ## How it works
 
 ```mermaid
 flowchart LR
-    sender["Webhook sender<br/>GitHub, GitLab or any<br/>service with a secret"]:::sender
+    sender["Webhook sender<br/>GitHub, GitLab, Jira<br/>or any service with a secret"]:::sender
 
     subgraph airflow ["Apache Airflow"]
         subgraph plugin ["API server · inbound webhooks plugin"]
@@ -76,66 +263,6 @@ flowchart LR
 The plugin never runs Dags itself. It records asset events, Airflow queues every Dag that schedules
 on them, and the scheduler creates the runs. So one delivery can start several Dags, paused Dags stay
 paused, and asset expressions such as `a | b` work as usual.
-
-## Quick start
-
-This uses a generic sender, so it needs no third-party account. On the machine running the Airflow
-API server (Airflow 3.1.1 or later):
-
-1. **Install the plugin** into the API server's environment, with your Airflow version's
-   constraints. Until the first PyPI release, install from a clone:
-
-   ```bash
-   git clone https://github.com/dheerajturaga/airflow-provider-inbound-webhooks
-   AIRFLOW_VERSION=3.3.2  # your Airflow version
-   PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-   pip install ./airflow-provider-inbound-webhooks --constraint \
-     "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
-   ```
-
-   The plugin registers itself through the `airflow.plugins` entry point. Restart the API server so
-   it is loaded.
-
-2. **Create the connection** that defines the webhook. In the Airflow UI, under Admin →
-   Connections, add a connection of type **Inbound Webhook**:
-
-   | Field | Value |
-   |---|---|
-   | Connection Id | `webhook_demo`, so the URL path is `/webhooks/demo` |
-   | Shared secret | `change-me` |
-   | Source type | `hmac_json` |
-   | Signature header | `X-Signature` |
-   | Event field | `event` |
-   | Path field | `service` |
-
-   Or with the CLI:
-
-   ```bash
-   airflow connections add webhook_demo --conn-type inbound_webhook --conn-password 'change-me' \
-     --conn-extra '{"source_type": "hmac_json", "signature_header": "X-Signature",
-                    "event_field": "event", "path_field": "service"}'
-   ```
-
-3. **Add a Dag** that schedules on the event: copy
-   [`examples/dags/quickstart.py`](examples/dags/quickstart.py) into your Dags folder. It runs on
-   `demo/billing/deployed`. Once it appears in the Airflow UI, unpause it, since new Dags start
-   paused and a paused Dag is not queued:
-
-   ```bash
-   airflow dags unpause smoke_test_billing
-   ```
-
-4. **Send a signed delivery** with the bundled script, which uses only the Python standard library:
-
-   ```bash
-   python airflow-provider-inbound-webhooks/examples/send_test_event.py \
-     --url http://localhost:8080/webhooks/demo --secret 'change-me' \
-     --data '{"event": "deployed", "service": "billing"}'
-   ```
-
-   The response lists the asset event it recorded, and `smoke_test_billing` starts a run.
-
-Connections are read on every delivery, so adding or changing a webhook later needs no restart.
 
 ## Event names
 
@@ -209,8 +336,7 @@ who sent a delivery but not that it was unmodified, so it relies on TLS.
 ### `github`
 
 GitHub.com and GitHub Enterprise Server. An organization webhook covers every repository in the
-organization: set the payload URL to `https://<api-server>/webhooks/github`, the content type to
-JSON, and the secret to the connection's password.
+organization.
 
 Names use GitHub's own event and action names. The detail is the label for `labeled` and
 `unlabeled`, the branch for `push` (tag pushes have none), and the workflow name for
@@ -229,10 +355,9 @@ events, so a label added to a merge request or issue is reported as `<object_kin
 
 ### `jira`
 
-Jira Cloud and Jira Data Center. As a Jira administrator, create a webhook (in Jira Cloud under
-Settings → System → WebHooks) with the URL `https://<api-server>/webhooks/jira` and the connection's
-password as its secret. Leave **Exclude body** unchecked, since events are named from the body.
-Webhooks that Connect or OAuth 2.0 apps register are authenticated differently and not supported.
+Jira Cloud and Jira Data Center. Events are named from the body, so the webhook must not exclude
+it. Webhooks that Connect or OAuth 2.0 apps register are authenticated differently and not
+supported.
 
 Names use the payload's `webhookEvent` without its `jira:` prefix, under the issue's project key.
 The detail is the issue type for `issue_created`. `issue_updated` offers a name for each field in
@@ -336,17 +461,18 @@ work too. Fields left empty are treated as unset.
 Connections stored in Airflow's metadata database, in environment variables
 (`AIRFLOW_CONN_WEBHOOK_<NAME>`) or in a secrets backend all work.
 
-### Responses
+### Responses and troubleshooting
 
-| Status | Meaning |
-|---|---|
-| `202` `accepted` | Recorded; `asset_events` lists the asset event per subscribed name |
-| `202` `no_subscribers` | Verified, but no Dag schedules on any of the `candidates`; nothing stored |
-| `400` | The body is not a JSON object, or the event name is missing |
-| `401` | Signature or token does not match |
-| `404` | No such webhook: no `webhook_<name>` connection |
-| `413` | Body larger than `max_body_bytes` |
-| `503` | The connection is misconfigured; the API server log says why |
+| Status | Meaning | What to check |
+|---|---|---|
+| `202` `accepted` | Recorded; `asset_events` lists the asset event per subscribed name | If no Dag run starts, the Dag is paused |
+| `202` `no_subscribers` | Verified, but no Dag schedules on any of the `candidates`; nothing stored | The Dag schedules on one of the `candidates` and has been parsed: `airflow dags reserialize` parses it now |
+| `400` | The body is not a JSON object, or the event name is missing | GitHub: the content type is `application/json`. Jira: *Exclude body* is unchecked |
+| `401` | Signature or token does not match | The secret in the service equals the connection's password |
+| `404` | No such webhook: no `webhook_<name>` connection | The connection ID is `webhook_` plus the name in the URL |
+| `405` | The plugin is not loaded, so Airflow's UI answers | Restart the API server after installing; `airflow plugins` lists `webhooks` |
+| `413` | Body larger than `max_body_bytes` | Raise `max_body_bytes` in the connection |
+| `503` | The connection is misconfigured | The API server log says why |
 
 ## Security
 
