@@ -1,0 +1,17 @@
+# Copyright 2026 Dheeraj Turaga
+# SPDX-License-Identifier: Apache-2.0
+---
+# https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+version: 2
+updates:
+  # The workflows pin each action to a commit SHA, which only changes when Dependabot proposes it.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # A release must be a week old first, so a compromised one can be caught before it is proposed.
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
