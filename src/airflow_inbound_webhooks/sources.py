@@ -110,6 +110,14 @@ def get_field(payload: dict[str, Any], dotted_path: str) -> Any:
     return value
 
 
+def get_text(payload: dict[str, Any], dotted_path: str) -> str | None:
+    # The built-in sources read a field only as a non-empty string and treat any other value as
+    # absent, so a delivery of an unexpected shape gets fewer names, or a 400 if it lacks a required
+    # field, rather than a 500.
+    value = get_field(payload, dotted_path)
+    return value if isinstance(value, str) and value else None
+
+
 def get_label_titles(labels: Any) -> list[str]:
     # A malformed entry is skipped rather than failing the delivery, whose event is still valid.
     if not isinstance(labels, list):
@@ -135,7 +143,7 @@ class GitHubSource(WebhookSource):
         payload = load_json_object(headers, body)
         if not (event := headers.get("X-GitHub-Event")):
             raise ValueError("Missing X-GitHub-Event header")
-        action = payload.get("action")
+        action = get_text(payload, "action")
         detail = self.find_detail(event, action, payload)
         kind = (event, *(segment for segment in (action, detail) if segment))
         return WebhookEvent(
@@ -147,20 +155,20 @@ class GitHubSource(WebhookSource):
 
     @staticmethod
     def find_path(payload: dict[str, Any]) -> str | None:
-        if repo := get_field(payload, "repository.full_name"):
+        if repo := get_text(payload, "repository.full_name"):
             return repo
-        if org := get_field(payload, "organization.login"):
+        if org := get_text(payload, "organization.login"):
             return f"{org}/*"
         return None
 
     @staticmethod
     def find_detail(event: str, action: str | None, payload: dict[str, Any]) -> str | None:
         if action in ("labeled", "unlabeled"):
-            return get_field(payload, "label.name")
-        if event == "push" and (ref := payload.get("ref", "")).startswith("refs/heads/"):
+            return get_text(payload, "label.name")
+        if event == "push" and (ref := get_text(payload, "ref") or "").startswith("refs/heads/"):
             return ref.removeprefix("refs/heads/")
         if event == "workflow_run":
-            return get_field(payload, "workflow.name")
+            return get_text(payload, "workflow.name")
         return None
 
 
@@ -179,13 +187,14 @@ class GitLabSource(WebhookSource):
 
     def parse(self, headers: Headers, body: bytes) -> WebhookEvent:
         payload = load_json_object(headers, body)
-        if not (event := payload.get("object_kind")):
+        if not (event := get_text(payload, "object_kind")):
             raise ValueError("Missing object_kind")
-        attributes = payload.get("object_attributes") or {}
         kind: tuple[str, ...] = (event,)
-        if action := attributes.get("action") or attributes.get("status"):
+        if action := get_text(payload, "object_attributes.action") or get_text(
+            payload, "object_attributes.status"
+        ):
             kind = (*kind, action)
-        ref = payload.get("ref", "")
+        ref = get_text(payload, "ref") or ""
         if event == "push" and ref.startswith("refs/heads/"):
             kind = (*kind, ref.removeprefix("refs/heads/"))
         elif event == "tag_push" and ref.startswith("refs/tags/"):
@@ -197,7 +206,7 @@ class GitLabSource(WebhookSource):
             if title not in previous
         ]
         return WebhookEvent(
-            path=get_field(payload, "project.path_with_namespace"),
+            path=get_text(payload, "project.path_with_namespace"),
             kinds=[kind, *((event, "labeled", label) for label in added)],
             delivery_id=headers.get("X-Gitlab-Event-UUID"),
             payload=payload,
@@ -255,10 +264,10 @@ class JiraSource(WebhookSource):
             raise ValueError("Missing webhookEvent")
         event = webhook_event.removeprefix("jira:")
         kind: tuple[str, ...] = (event,)
-        if event == "issue_created" and (issue_type := get_field(payload, "issue.fields.issuetype.name")):
+        if event == "issue_created" and (issue_type := get_text(payload, "issue.fields.issuetype.name")):
             kind = (*kind, issue_type)
         return WebhookEvent(
-            path=get_field(payload, "issue.fields.project.key") or get_field(payload, "project.key"),
+            path=get_text(payload, "issue.fields.project.key") or get_text(payload, "project.key"),
             kinds=list(dict.fromkeys([kind, *self.find_changes(event, payload)])),
             delivery_id=headers.get("X-Atlassian-Webhook-Identifier"),
             payload=payload if self.store_payload == "full" else self.summarize(payload),
@@ -267,17 +276,18 @@ class JiraSource(WebhookSource):
     @staticmethod
     def find_changes(event: str, payload: dict[str, Any]) -> list[tuple[str, ...]]:
         changes: list[tuple[str, ...]] = []
-        for item in get_field(payload, "changelog.items") or []:
-            if not (field := item.get("field")):
+        items = get_field(payload, "changelog.items")
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict) or not (field := get_text(item, "field")):
                 continue
-            if field == "status" and (status := item.get("toString")):
+            if field == "status" and (status := get_text(item, "toString")):
                 changes.append((event, field, status))
             else:
                 changes.append((event, field))
             if field == "labels":
                 # Jira labels cannot contain spaces, so the changelog lists them space-separated.
-                previous = set((item.get("fromString") or "").split())
-                current = (item.get("toString") or "").split()
+                previous = set((get_text(item, "fromString") or "").split())
+                current = (get_text(item, "toString") or "").split()
                 changes.extend((event, "labeled", label) for label in current if label not in previous)
         return changes
 

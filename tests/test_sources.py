@@ -10,6 +10,7 @@ import json
 import pytest
 from starlette.datastructures import Headers
 
+from airflow_inbound_webhooks.naming import build_candidate_names
 from airflow_inbound_webhooks.sources import (
     GitHubSource,
     GitLabSource,
@@ -451,3 +452,111 @@ class TestTokenHeaderSource:
     def test_from_extra_rejects(self, extra):
         with pytest.raises(ValueError, match="token_header"):
             TokenHeaderSource.from_extra(extra)
+
+
+# Values of the wrong type, or empty, for any field a parser reads.
+ODD_VALUES = [None, 7, 1.5, True, "", "text", [], ["text"], [None], {}, {"text": 1}]
+# A delivery of each built-in source type carrying every field its parser reads, and those fields.
+FULL_DELIVERIES = [
+    *(
+        pytest.param(
+            GitHubSource(),
+            {"X-GitHub-Event": event},
+            {
+                "action": "labeled",
+                "label": {"name": "deploy-preview"},
+                "ref": "refs/heads/main",
+                "workflow": {"name": "CI"},
+                "repository": {"full_name": "o/web"},
+                "organization": {"login": "o"},
+            },
+            ["action", "label", "label.name", "ref", "workflow", "workflow.name", "repository"]
+            + ["repository.full_name", "organization", "organization.login"],
+            id=f"github-{event}",
+        )
+        for event in ("push", "pull_request", "workflow_run")
+    ),
+    *(
+        pytest.param(
+            GitLabSource(),
+            {},
+            {
+                "object_kind": object_kind,
+                "object_attributes": {"action": "update", "status": "success"},
+                "ref": f"refs/{'tags' if object_kind == 'tag_push' else 'heads'}/main",
+                "project": {"path_with_namespace": "g/sub/web"},
+                "changes": {
+                    "labels": {"previous": [{"title": "a"}], "current": [{"title": "a"}, {"title": "b"}]}
+                },
+            },
+            [
+                "object_kind",
+                "object_attributes",
+                "object_attributes.action",
+                "object_attributes.status",
+                "ref",
+            ]
+            + ["project", "project.path_with_namespace", "changes", "changes.labels"]
+            + ["changes.labels.previous", "changes.labels.current", "changes.labels.current.1"]
+            + ["changes.labels.current.1.title"],
+            id=f"gitlab-{object_kind}",
+        )
+        for object_kind in ("push", "tag_push", "merge_request")
+    ),
+    *(
+        pytest.param(
+            JiraSource(),
+            {},
+            {
+                "webhookEvent": f"jira:{event}",
+                "issue": {"fields": {"project": {"key": "OPS"}, "issuetype": {"name": "Bug"}}},
+                "project": {"key": "OPS"},
+                "changelog": {
+                    "items": [
+                        {"field": "status", "toString": "Done"},
+                        {"field": "labels", "fromString": "a", "toString": "a b"},
+                    ]
+                },
+            },
+            ["webhookEvent", "issue", "issue.fields", "issue.fields.project", "issue.fields.project.key"]
+            + ["issue.fields.issuetype", "issue.fields.issuetype.name", "project", "project.key", "changelog"]
+            + [
+                "changelog.items",
+                "changelog.items.0",
+                "changelog.items.0.field",
+                "changelog.items.0.toString",
+            ]
+            + ["changelog.items.1.fromString", "changelog.items.1.toString"],
+            id=f"jira-{event}",
+        )
+        for event in ("issue_created", "issue_updated")
+    ),
+]
+
+
+def replace_field(payload: dict, dotted_path: str, value) -> dict:
+    payload = json.loads(json.dumps(payload))
+    *parents, last = dotted_path.split(".")
+    target = payload
+    for key in parents:
+        target = target[int(key)] if isinstance(target, list) else target[key]
+    if isinstance(target, list):
+        target[int(last)] = value
+    else:
+        target[last] = value
+    return payload
+
+
+@pytest.mark.parametrize(("source", "headers", "payload", "fields"), FULL_DELIVERIES)
+def test_signed_delivery_of_any_shape_is_named_or_refused(source, headers, payload, fields):
+    # A signature proves who sent a delivery, not its shape. Anything but ValueError (a 400) would be a
+    # 500, which services retry and GitLab answers by disabling the webhook for a while.
+    for field in fields:
+        for value in ODD_VALUES:
+            try:
+                parsed = parse_json(source, replace_field(payload, field, value), **headers)
+            except ValueError:
+                continue
+            assert parsed.path is None or isinstance(parsed.path, str), (field, value)
+            assert all(isinstance(segment, str) for kind in parsed.kinds for segment in kind), (field, value)
+            build_candidate_names("hooks", parsed)

@@ -104,13 +104,16 @@ lookup and recording, is shared. Source types live in `src/airflow_inbound_webho
      valid signature or token for `secret`. Compare with `hmac.compare_digest`, never `==`.
    - `parse(headers, body)`: return a `WebhookEvent` with the `path` (where it happened, `/`-separated,
      broad to narrow) and `kinds` (what happened, each a tuple from broad to specific), and raise
-     `ValueError` for a malformed body.
+     `ValueError` for a malformed body. Read payload fields with `get_text()`, which treats a value
+     of any other type as absent, and raise `ValueError` only when a field the event needs is
+     missing: any other exception answers the delivery with a `500`, which services retry.
    - `from_extra(extra)`, if the type has options: build it from the connection extra and raise
      `ValueError` naming the problem, which the endpoint reports as a misconfigured connection.
 2. Register it in `SOURCE_TYPES`, and add it, and any new options, to the connection form in
    `src/airflow_inbound_webhooks/connection_form.py`.
 3. Add tests in `tests/test_sources.py` for verification (valid, missing, wrong) and parsing, and an
-   end-to-end case in `tests/test_app.py`.
+   end-to-end case in `tests/test_app.py`. Add a delivery carrying every field `parse()` reads to
+   `FULL_DELIVERIES`, which checks that a delivery of any shape is named or refused.
 4. Document it under "Source types" in the README.
 
 Use the service's own event and action names, so its webhook documentation stays the reference for
