@@ -88,7 +88,11 @@ expression checks, including inclusive language and not raising `AirflowExceptio
   supports, with SQLite;
 - the tests on PostgreSQL 17 and MySQL 8.4, against Airflow 3.1.1 and the newest release;
 - mypy against the newest release, whose type annotations are the most precise;
-- a check that installing next to Airflow 3.1.0 is refused.
+- a check that installing next to Airflow 3.1.0 is refused;
+- **CI passed**, which succeeds only if every job above did. It is the one check a pull request
+  needs before it can be merged into `main`, so the matrix can change without updating that rule.
+
+A pull request from a fork runs CI once a maintainer approves it.
 
 When a new Airflow minor version is released, add its newest patch to the matrix, on the oldest and
 the newest Python it supports. When the newest release supports a new Python, move the `latest`

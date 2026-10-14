@@ -147,3 +147,23 @@ jobs:
           tr -s '[:space:]' ' ' < install.log | grep -q "depends on apache-airflow>=3.1.1" \
             || { cat install.log; exit 1; }
           echo "Refused as expected: the package depends on apache-airflow>=3.1.1"
+
+  # The one check the main ruleset requires, so the matrix can change without updating the ruleset.
+  ci-passed:
+    name: CI passed
+    if: always()
+    needs: [static-checks, tests, minimum-airflow-version]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check that every job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          # A matrix job's result is success only if every one of its entries succeeded.
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            if [[ "$result" != "success" ]]; then
+              echo "::error::A job ended with $result; every job must pass"
+              exit 1
+            fi
+          done
