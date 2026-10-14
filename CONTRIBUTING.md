@@ -20,8 +20,9 @@ uv pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "$CONSTRAINTS"
 uv pip install --editable . pytest mypy --constraint "$CONSTRAINTS"
 ```
 
-Editable mode matters: the plugin is only loaded through its `airflow.plugins` entry point, and the
-API server tests rely on it.
+Install the package rather than adding `src` to the path: the plugin is only loaded through its
+`airflow.plugins` entry point, which the API server tests rely on. Editable mode applies changes
+without reinstalling; CI installs the built wheel instead.
 
 ## Tests
 
@@ -31,7 +32,24 @@ API server tests rely on it.
 ```
 
 The tests need no Airflow setup: `tests/conftest.py` creates a throwaway Airflow home with a SQLite
-database. They are organised as:
+database. To run them on PostgreSQL or MySQL, as CI does, name a database in
+`INBOUND_WEBHOOKS_TEST_DATABASE`. The tests delete Dags, assets and connections, so give them a
+database of their own, never one Airflow runs on:
+
+```bash
+docker run --rm --detach --name webhooks-test-postgres --publish 127.0.0.1:55432:5432 \
+  --env POSTGRES_USER=airflow --env POSTGRES_PASSWORD=airflow --env POSTGRES_DB=airflow postgres:17
+uv pip install "apache-airflow[postgres]==${AIRFLOW_VERSION}" --constraint "$CONSTRAINTS"
+INBOUND_WEBHOOKS_TEST_DATABASE=postgresql+psycopg2://airflow:airflow@127.0.0.1:55432/airflow .venv/bin/pytest
+```
+
+For MySQL, run `mysql:8.4` with `--env MYSQL_ROOT_PASSWORD=airflow --env MYSQL_DATABASE=airflow`,
+install the `mysql` extra and use `mysql+mysqldb://root:airflow@127.0.0.1:<port>/airflow`. Building
+its `mysqlclient` driver needs `pkg-config`, the MySQL client headers and a Python with its headers,
+such as one from `uv venv --managed-python`. Start a new database for each Airflow version: an older
+Airflow cannot migrate a database that a newer one has upgraded.
+
+The tests are organised as:
 
 | File | Covers |
 |---|---|
@@ -65,11 +83,16 @@ expression checks, including inclusive language and not raising `AirflowExceptio
 `.github/workflows/ci.yml` runs on every push and pull request, and weekly:
 
 - the static checks;
-- the tests against Airflow 3.1.1, the newest patch of each supported minor version and the newest
-  release, plus mypy against the newest release, whose type annotations are the most precise;
+- the tests, installed from the built wheel, against Airflow 3.1.1, the newest patch of each
+  supported minor version and the newest release, each on the oldest and the newest Python it
+  supports, with SQLite;
+- the tests on PostgreSQL 17 and MySQL 8.4, against Airflow 3.1.1 and the newest release;
+- mypy against the newest release, whose type annotations are the most precise;
 - a check that installing next to Airflow 3.1.0 is refused.
 
-When a new Airflow minor version is released, add its newest patch to the matrix.
+When a new Airflow minor version is released, add its newest patch to the matrix, on the oldest and
+the newest Python it supports. When the newest release supports a new Python, move the `latest`
+entries to it.
 
 ## Adding a source type
 

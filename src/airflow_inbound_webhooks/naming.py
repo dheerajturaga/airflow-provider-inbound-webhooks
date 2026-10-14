@@ -17,8 +17,8 @@ if TYPE_CHECKING:
 
 
 def normalize_segment(value: str) -> str:
-    # Airflow rejects non-ASCII asset names on MySQL; fold on every backend so names do not
-    # depend on the database ("🚀 deploy" -> "deploy", "café" -> "cafe").
+    # MySQL stores asset names as latin1 and fails any lookup that includes a non-ASCII name; fold on
+    # every database so names do not depend on it ("🚀 deploy" -> "deploy", "café" -> "cafe").
     return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode().strip()
 
 

@@ -30,4 +30,5 @@ new names.
 - Multi-team attribution through `team_name` on Airflow 3.3 and later.
 - The "Inbound Webhook" connection type, with a form in the Airflow UI for every source type option.
 - A quick start with `examples/send_test_event.py` and example Dags.
-- Support for Airflow 3.1.1 and later.
+- Support for Airflow 3.1.1 and later, on Python 3.10 to 3.13 (3.14 from Airflow 3.2), with a SQLite,
+  PostgreSQL or MySQL metadata database.
