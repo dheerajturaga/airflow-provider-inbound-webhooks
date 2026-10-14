@@ -153,6 +153,20 @@ class TestGitLabSource:
                 id="label-added",
             ),
             pytest.param(
+                {
+                    "object_kind": "merge_request",
+                    "object_attributes": {"action": "update"},
+                    "changes": {
+                        "labels": {
+                            "previous": "bug",
+                            "current": ["bug", {"name": "x"}, {"title": 1}, {"title": "deploy-preview"}],
+                        }
+                    },
+                },
+                [("merge_request", "update"), ("merge_request", "labeled", "deploy-preview")],
+                id="malformed-labels-skipped",
+            ),
+            pytest.param(
                 {"object_kind": "push", "ref": "refs/heads/main"}, [("push", "main")], id="branch-push"
             ),
             pytest.param(
@@ -336,6 +350,7 @@ class TestHmacJsonSource:
         ("options", "signature"),
         [
             pytest.param({"signature_prefix": "v1="}, f"v1={compute_hex_signature()}", id="prefixed-hex"),
+            pytest.param({}, compute_hex_signature().upper(), id="uppercase-hex"),
             pytest.param(
                 {"signature_encoding": "base64"},
                 base64.b64encode(hmac.new(SECRET.encode(), BODY, hashlib.sha256).digest()).decode(),
@@ -347,6 +362,13 @@ class TestHmacJsonSource:
         source = HmacJsonSource.from_extra({**self.EXTRA, **options})
 
         source.verify(Headers({"X-Signature": signature}), BODY, SECRET)
+
+    def test_base64_signature_is_case_sensitive(self):
+        source = HmacJsonSource.from_extra({**self.EXTRA, "signature_encoding": "base64"})
+        signature = base64.b64encode(hmac.new(SECRET.encode(), BODY, hashlib.sha256).digest()).decode()
+
+        with pytest.raises(WebhookVerificationError):
+            source.verify(Headers({"X-Signature": signature.swapcase()}), BODY, SECRET)
 
     def test_base64_source_rejects_hex_signature(self):
         source = HmacJsonSource.from_extra({**self.EXTRA, "signature_encoding": "base64"})

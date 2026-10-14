@@ -93,9 +93,15 @@ lookup and recording, is shared. Source types live in `src/airflow_inbound_webho
 Use the service's own event and action names, so its webhook documentation stays the reference for
 Dag authors.
 
+Event names are part of the interface. Once a source type is released, changing a name that an
+existing delivery produces is a breaking change; see "Stability" under "Event names" in the README.
+Adding a kind or a detail is not, because the shorter names are still offered.
+
 ## Commits and pull requests
 
 - Keep each pull request to one change, with tests and documentation updated alongside the code.
 - Write the commit subject as plain prose in the imperative ("Add a GitLab tag source"), not
   Conventional Commits (`feat:`, `fix:`); a commit-message hook enforces this.
-- Add a line to [CHANGELOG.md](CHANGELOG.md) under "Unreleased" for user-visible changes.
+- Add a line to [CHANGELOG.md](CHANGELOG.md) under "Unreleased" for user-visible changes. A change
+  to the names existing deliveries produce goes under "Changed event names", with the old and new
+  names.
