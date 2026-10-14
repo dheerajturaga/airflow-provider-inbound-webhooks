@@ -3,6 +3,9 @@
 ---
 blank_issues_enabled: false
 contact_links:
+  - name: Ask a question
+    url: https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/discussions/categories/q-a
+    about: Ask how to set up a webhook or write a Dag in Discussions, so issues stay for bugs and features.
   - name: Report a security vulnerability
     url: https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/security/advisories/new
     about: Report vulnerabilities privately, as described in SECURITY.md.
