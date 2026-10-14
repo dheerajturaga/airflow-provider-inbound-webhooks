@@ -44,18 +44,27 @@ service's signature and records the delivery as an asset event.
 Try it with the bundled test sender, so no third-party account is needed. Run these commands on the
 machine running the Airflow API server (Airflow 3.1.1 or later).
 
-1. **Install the plugin**, then restart the API server. Until the first PyPI release, install from a
-   clone:
+1. **Install the plugin.** Until the first PyPI release, install from a clone:
 
    ```bash
    git clone https://github.com/dheerajturaga/airflow-provider-inbound-webhooks
    pip install ./airflow-provider-inbound-webhooks "apache-airflow==$(airflow version)"
    ```
 
-   Pinning `apache-airflow` to the version you run keeps pip from changing it. After the restart,
-   `airflow plugins` lists `webhooks`.
+   Pinning `apache-airflow` to the version you run keeps pip from changing it.
 
-2. **Create the webhook.** It is a connection, named `webhook_demo` for the URL `/webhooks/demo`:
+2. **Enable the webhook name** `demo`, then restart the API server. The plugin serves only the names
+   listed in [`webhook_names`](#configuration), so add this to `airflow.cfg` in your Airflow home:
+
+   ```ini
+   [inbound_webhooks]
+   webhook_names = demo
+   ```
+
+   Or set `AIRFLOW__INBOUND_WEBHOOKS__WEBHOOK_NAMES=demo` in the API server's environment. After the
+   restart, `airflow plugins` lists `webhooks`.
+
+3. **Create the webhook.** It is a connection, named `webhook_demo` for the URL `/webhooks/demo`:
 
    ```bash
    airflow connections add webhook_demo --conn-type inbound_webhook --conn-password 'change-me' \
@@ -79,7 +88,7 @@ machine running the Airflow API server (Airflow 3.1.1 or later).
 
    </details>
 
-3. **Add a Dag** that runs on the event, and unpause it, since new Dags start paused:
+4. **Add a Dag** that runs on the event, and unpause it, since new Dags start paused:
 
    ```bash
    cp airflow-provider-inbound-webhooks/examples/dags/quickstart.py "$(airflow config get-value core dags_folder)"
@@ -87,7 +96,7 @@ machine running the Airflow API server (Airflow 3.1.1 or later).
    airflow dags unpause smoke_test_billing
    ```
 
-4. **Send a signed test delivery:**
+5. **Send a signed test delivery:**
 
    ```bash
    python airflow-provider-inbound-webhooks/examples/send_test_event.py \
@@ -104,12 +113,14 @@ machine running the Airflow API server (Airflow 3.1.1 or later).
 
    Anything else? See [Responses and troubleshooting](#responses-and-troubleshooting).
 
-Connections are read on every delivery, so adding or changing a webhook later needs no restart.
+A webhook's connection is read again within a minute of a change, so changing its secret or options
+needs no restart. Adding a webhook does, because its name must be added to `webhook_names`.
 
 ## Connect a service
 
-Every service takes the same steps: in Airflow, create a connection holding a secret; in the service,
-add a webhook with that secret; then, in Airflow, schedule a Dag on one of its events.
+Every service takes the same steps: in Airflow, enable the webhook's name and create a connection
+holding a secret; in the service, add a webhook with that secret; then, in Airflow, schedule a Dag on
+one of its events.
 
 | Service | Source type | Setup |
 |---|---|---|
@@ -126,14 +137,18 @@ Before you start:
 
 - The plugin is installed on the API server: [Quick start](#quick-start), step 1.
 - The service can reach the API server. A cloud service, such as GitHub.com, GitLab.com or Jira
-  Cloud, needs a public HTTPS address: put a reverse proxy in front of the API server that forwards only `/webhooks/*` (see
-  [Security](#security)). `<your-airflow>` below stands for that address.
+  Cloud, needs a public HTTPS address: put a reverse proxy in front of the API server that forwards
+  only the paths of your webhooks, such as `/webhooks/github` (see [Security](#security)).
+  `<your-airflow>` below stands for that address.
 
 ### Connect GitHub
 
 **In Airflow**
 
-1. Create the connection `webhook_github` with a new secret, and copy the secret it prints:
+1. Add `github` to [`webhook_names`](#configuration), the comma-separated list in `airflow.cfg`,
+   and restart the API server.
+
+2. Create the connection `webhook_github` with a new secret, and copy the secret it prints:
 
    ```bash
    SECRET="$(openssl rand -hex 32)" && echo "$SECRET"
@@ -142,25 +157,25 @@ Before you start:
 
 **In GitHub**
 
-2. In the repository, open **Settings → Webhooks → Add webhook**. To cover every repository of an
+3. In the repository, open **Settings → Webhooks → Add webhook**. To cover every repository of an
    organization, use the organization's **Settings → Webhooks** instead, as an organization owner.
 
-3. Fill in the form, then select **Add webhook**:
+4. Fill in the form, then select **Add webhook**:
 
    | Field | Value |
    |---|---|
    | Payload URL | `https://<your-airflow>/webhooks/github` |
    | Content type | `application/json`. The default, `application/x-www-form-urlencoded`, is refused. |
-   | Secret | The secret from step 1 |
+   | Secret | The secret from step 2 |
    | Which events would you like to trigger this webhook? | **Let me select individual events**, then the ones your Dags need, such as *Pull requests* or *Pushes* |
    | Active | Checked |
 
-4. Check it. GitHub sends a `ping` right away: on the webhook's **Recent Deliveries** tab it should
+5. Check it. GitHub sends a `ping` right away: on the webhook's **Recent Deliveries** tab it should
    have a green check, and its response should be `202` with `"status":"no_subscribers"`.
 
 **In Airflow**
 
-5. Add a Dag that schedules on an event, such as
+6. Add a Dag that schedules on an event, such as
    `Asset("github/my-org/web/pull_request/labeled/deploy-preview")`, and unpause it. To find a name,
    trigger the event once and copy one of the `candidates` from its response under **Recent
    Deliveries**, or see [Event names](#event-names).
@@ -169,7 +184,10 @@ Before you start:
 
 **In Airflow**
 
-1. Create the connection `webhook_gitlab` with a new secret, and copy the secret it prints:
+1. Add `gitlab` to [`webhook_names`](#configuration), the comma-separated list in `airflow.cfg`,
+   and restart the API server.
+
+2. Create the connection `webhook_gitlab` with a new secret, and copy the secret it prints:
 
    ```bash
    SECRET="$(openssl rand -hex 32)" && echo "$SECRET"
@@ -178,24 +196,24 @@ Before you start:
 
 **In GitLab**
 
-2. In the project, open **Settings → Webhooks → Add new webhook**. To cover every project of a group,
+3. In the project, open **Settings → Webhooks → Add new webhook**. To cover every project of a group,
    use the group's **Settings → Webhooks** instead, as a group owner (GitLab Premium).
 
-3. Fill in the form, then select **Add webhook**:
+4. Fill in the form, then select **Add webhook**:
 
    | Field | Value |
    |---|---|
    | URL | `https://<your-airflow>/webhooks/gitlab` |
-   | Secret token | The secret from step 1. GitLab also offers a *Signing token*, which this plugin does not check yet; you can set both. |
+   | Secret token | The secret from step 2. GitLab also offers a *Signing token*, which this plugin does not check yet; you can set both. |
    | Trigger | The events your Dags need, such as *Push events*, *Merge request events* or *Pipeline events* |
    | Enable SSL verification | Checked |
 
-4. Check it. In the list of webhooks, select **Test → Push events**. GitLab should report `HTTP 202`;
+5. Check it. In the list of webhooks, select **Test → Push events**. GitLab should report `HTTP 202`;
    **Edit → Recent events → View details** shows the response.
 
 **In Airflow**
 
-5. Add a Dag that schedules on an event, such as `Asset("gitlab/platform/api/pipeline/success")`, and
+6. Add a Dag that schedules on an event, such as `Asset("gitlab/platform/api/pipeline/success")`, and
    unpause it. To find a name, trigger the event once and copy one of the `candidates` from its
    response under **Recent events**, or see [Event names](#event-names).
 
@@ -203,7 +221,10 @@ Before you start:
 
 **In Airflow**
 
-1. Create the connection `webhook_jira` with a new secret, and copy the secret it prints:
+1. Add `jira` to [`webhook_names`](#configuration), the comma-separated list in `airflow.cfg`,
+   and restart the API server.
+
+2. Create the connection `webhook_jira` with a new secret, and copy the secret it prints:
 
    ```bash
    SECRET="$(openssl rand -hex 32)" && echo "$SECRET"
@@ -212,30 +233,31 @@ Before you start:
 
 **In Jira**, as a Jira administrator
 
-2. Open **Settings (⚙) → System → WebHooks → Create a WebHook**. On Jira Data Center, the menu is
+3. Open **Settings (⚙) → System → WebHooks → Create a WebHook**. On Jira Data Center, the menu is
    **Administration (⚙) → System → WebHooks**.
 
-3. Fill in the form, then create the webhook:
+4. Fill in the form, then create the webhook:
 
    | Field | Value |
    |---|---|
    | Name | Any, such as `Airflow` |
    | Status | Enabled |
    | URL | `https://<your-airflow>/webhooks/jira` |
-   | Secret | The secret from step 1. Jira cannot show it again once saved. |
+   | Secret | The secret from step 2. Jira cannot show it again once saved. |
    | Issue related events | A JQL filter such as `project = OPS`, and the events your Dags need, such as issue *created* and *updated* |
    | Exclude body | Unchecked |
 
 **In Airflow**
 
-4. Add a Dag that schedules on an event, such as
+5. Add a Dag that schedules on an event, such as
    `Asset("jira/OPS/issue_updated/status/Ready for Deploy")`, and unpause it. See [`jira`](#jira) for
    the names Jira events get.
 
-5. Check it by making that change in Jira, here moving an `OPS` issue to *Ready for Deploy*: the Dag
+6. Check it by making that change in Jira, here moving an `OPS` issue to *Ready for Deploy*: the Dag
    starts a run. Jira does not show webhook responses, so if nothing happens, check the API server
    log: it reports a delivery whose secret does not match, or a misconfigured connection. Otherwise
-   check that *Exclude body* is unchecked and that the Dag is unpaused.
+   check that `jira` is in `webhook_names`, that *Exclude body* is unchecked and that the Dag is
+   unpaused.
 
 ### Connect any other service
 
@@ -253,7 +275,10 @@ describe its deliveries in the connection.
 
 **In Airflow**
 
-1. Create the connection `webhook_deploybot` with a new secret and those options, and copy the secret
+1. Add `deploybot` to [`webhook_names`](#configuration), the comma-separated list in `airflow.cfg`,
+   and restart the API server.
+
+2. Create the connection `webhook_deploybot` with a new secret and those options, and copy the secret
    it prints:
 
    ```bash
@@ -269,12 +294,12 @@ describe its deliveries in the connection.
 
 **In the service**
 
-2. Add a webhook with the URL `https://<your-airflow>/webhooks/deploybot` and the secret from step 1,
+3. Add a webhook with the URL `https://<your-airflow>/webhooks/deploybot` and the secret from step 2,
    sending JSON.
 
 **In Airflow**
 
-3. Add a Dag that schedules on an event, such as `Asset("deploybot/billing/deployed")`, and unpause
+4. Add a Dag that schedules on an event, such as `Asset("deploybot/billing/deployed")`, and unpause
    it. To find a name, send the event once and copy one of the `candidates` from the response, or see
    [Event names](#event-names).
 
@@ -525,6 +550,16 @@ work too. Fields left empty are treated as unset.
 Connections stored in Airflow's metadata database, in environment variables
 (`AIRFLOW_CONN_WEBHOOK_<NAME>`) or in a secrets backend all work.
 
+### Configuration
+
+Options in the `[inbound_webhooks]` section of `airflow.cfg` on the API server, or the environment
+variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `webhook_names` | empty | Comma-separated names of the webhooks to serve, such as `github,jira`. Requests for any other name are answered with `404` without looking up a connection. Empty serves no webhook, and the API server log says so once. `*` serves any name and reads its connection on every delivery, which lets anyone who can reach the endpoint make a call to your secrets backend. Changes need an API server restart. |
+| `connection_cache_ttl` | `60` | Seconds a listed webhook's connection is reused before it is read again, including a missing or misconfigured one. A rotated secret or changed option takes up to this long to apply. `0` reads the connection on every delivery. |
+
 ### Responses and troubleshooting
 
 | Status | Meaning | What to check |
@@ -533,7 +568,7 @@ Connections stored in Airflow's metadata database, in environment variables
 | `202` `no_subscribers` | Verified, but no Dag schedules on any of the `candidates`; nothing stored | The Dag schedules on one of the `candidates` and has been parsed: `airflow dags reserialize` parses it now |
 | `400` | The body is not a JSON object, or the event name is missing | GitHub: the content type is `application/json`. Jira: *Exclude body* is unchecked |
 | `401` | Signature or token does not match | The secret in the service equals the connection's password |
-| `404` | No such webhook: no `webhook_<name>` connection | The connection ID is `webhook_` plus the name in the URL |
+| `404` | No such webhook: the name is not in `webhook_names`, or has no `webhook_<name>` connection | The name is in `webhook_names` and the API server was restarted after it changed; the connection ID is `webhook_` plus the name in the URL |
 | `405` | The plugin is not loaded, so Airflow's UI answers | Restart the API server after installing; `airflow plugins` lists `webhooks` |
 | `413` | Body larger than `max_body_bytes` | Raise `max_body_bytes` in the connection |
 | `503` | The connection is misconfigured | The API server log says why |
@@ -543,13 +578,19 @@ Connections stored in Airflow's metadata database, in environment variables
 - **The endpoint is open to anyone who can reach it.** It does not use Airflow's login: it has to
   accept services that cannot log in. Every delivery is verified against the webhook's secret before
   anything is recorded, and unknown webhook names are answered with `404`.
-- **Expose only `/webhooks/`.** If the API server must be reachable by an external service, put a
-  reverse proxy in front that forwards only `/webhooks/*`, rather than exposing the whole Airflow UI
-  and API.
+- **Only listed webhooks reach your secrets backend.** A request for a name that is not in `webhook_names` is
+  refused before any connection is read, and each listed webhook's connection is read at most once
+  per `connection_cache_ttl` by each API server worker, whatever arrives. So a flood of
+  unauthenticated requests costs your secrets backend about one call per webhook a minute. Setting
+  `webhook_names` to `*` gives this up.
+- **Expose only your webhooks.** If the API server must be reachable by an external service, put a
+  reverse proxy in front that forwards only their paths, such as `/webhooks/github`, rather than
+  exposing the whole Airflow UI and API, and have it rate-limit them.
 - **Use HTTPS.** It matters most for `token_header` and GitLab, where the secret itself travels in a
   header.
 - **Use strong secrets, ideally from a secrets backend,** which keeps them out of the metadata
-  database.
+  database. After rotating one, deliveries signed with the new secret are refused until the cached
+  connection expires (`connection_cache_ttl`); redeliver them from the service's delivery log.
 - **No replay protection yet.** A captured delivery can be sent again. Signatures over a timestamp
   would allow rejecting old deliveries; see [docs/design.md](docs/design.md).
 - Bodies larger than `max_body_bytes` are refused before verification.

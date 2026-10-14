@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 from unittest import mock
 
@@ -17,6 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from airflow_inbound_webhooks import app
 from airflow_inbound_webhooks.app import build_app, get_asset_change_arguments
 
 pytestmark = pytest.mark.usefixtures("clean_db")
@@ -27,6 +29,10 @@ SECRET = "s3cret"
 def build_conn_env(name: str, **extra) -> dict[str, str]:
     conn = {"conn_type": "generic", "password": SECRET, "extra": extra}
     return {f"AIRFLOW_CONN_WEBHOOK_{name.upper()}": json.dumps(conn)}
+
+
+def build_config_env(**options: str) -> dict[str, str]:
+    return {f"AIRFLOW__INBOUND_WEBHOOKS__{option.upper()}": value for option, value in options.items()}
 
 
 GITHUB_CONN = build_conn_env("github", max_body_bytes=4096)
@@ -81,6 +87,23 @@ def get_queued_dag_ids(session) -> set[str]:
 @pytest.fixture
 def client():
     return TestClient(build_app())
+
+
+@pytest.fixture(autouse=True)
+def fresh_webhook_cache():
+    """Forget resolved connections, which would otherwise outlive the test that created them."""
+    app.resolved_webhooks.clear()
+    app.warn_no_webhook_names.cache_clear()
+    yield
+    app.resolved_webhooks.clear()
+    app.warn_no_webhook_names.cache_clear()
+
+
+@pytest.fixture
+def connection_lookups():
+    """Count connection lookups: the cost an unauthenticated request could add to a secrets backend."""
+    with mock.patch.object(app.Connection, "get", wraps=app.Connection.get) as get:
+        yield get
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
@@ -379,3 +402,80 @@ def test_delivery_fails_when_register_asset_change_no_longer_names_an_argument(c
         post_github(client)
 
     assert count_asset_events(session) == 0
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+@pytest.mark.parametrize(
+    ("webhook_names", "expected_status", "expected_lookups"),
+    [
+        pytest.param("github", 202, 1, id="listed"),
+        pytest.param(" gitlab , github ", 202, 1, id="listed-among-others"),
+        pytest.param("gitlab", 404, 0, id="not-listed"),
+        pytest.param("", 404, 0, id="none-listed"),
+        pytest.param("*", 202, 1, id="any-name"),
+    ],
+)
+def test_only_listed_webhooks_are_looked_up(
+    client, connection_lookups, webhook_names, expected_status, expected_lookups
+):
+    with mock.patch.dict(os.environ, build_config_env(webhook_names=webhook_names)):
+        response = post_github(client)
+
+    assert response.status_code == expected_status
+    assert connection_lookups.call_count == expected_lookups
+
+
+@mock.patch.dict(os.environ, build_config_env(webhook_names=""))
+def test_unset_webhook_names_is_logged_once(client, caplog):
+    for _ in range(2):
+        assert post_github(client).json() == {"detail": "Unknown webhook"}
+
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "webhook_names is not set" in warnings[0]
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="github")})
+def test_connection_is_read_once_per_cache_ttl(client, connection_lookups):
+    with mock.patch("airflow_inbound_webhooks.app.time") as mock_time:
+        mock_time.monotonic.return_value = 1000.0
+        # A failed verification must not read the connection again, or it would not bound the cost.
+        statuses = [post_github(client, secret=secret).status_code for secret in (SECRET, "wrong", SECRET)]
+        assert connection_lookups.call_count == 1
+
+        mock_time.monotonic.return_value = 1060.0
+        statuses.append(post_github(client).status_code)
+
+    assert statuses == [202, 401, 202, 202]
+    assert connection_lookups.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("conn_env", "expected_status"),
+    [
+        pytest.param({}, 404, id="no-connection"),
+        pytest.param(build_conn_env("github", source_type="bitbucket"), 503, id="misconfigured"),
+    ],
+)
+def test_failed_lookup_is_cached(client, connection_lookups, conn_env, expected_status):
+    with mock.patch.dict(os.environ, {**conn_env, **build_config_env(webhook_names="github")}):
+        statuses = [post_github(client).status_code for _ in range(2)]
+
+    assert statuses == [expected_status] * 2
+    assert connection_lookups.call_count == 1
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+@pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param({"webhook_names": "github", "connection_cache_ttl": "0"}, id="cache-disabled"),
+        pytest.param({"webhook_names": "*"}, id="any-name"),
+    ],
+)
+def test_connection_is_read_on_every_delivery(client, connection_lookups, config):
+    with mock.patch.dict(os.environ, build_config_env(**config)):
+        statuses = [post_github(client).status_code for _ in range(2)]
+
+    assert statuses == [202, 202]
+    assert connection_lookups.call_count == 2
