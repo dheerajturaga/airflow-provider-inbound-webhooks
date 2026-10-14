@@ -20,6 +20,9 @@ Each verified delivery becomes an **asset event**, named after what happened. A 
 scheduling on that name, and Airflow does the rest. There is no routing code to write, and adding a
 sender is one Airflow connection.
 
+GitHub, GitLab and Jira are built in, with more services on the way. Any other service that signs
+its deliveries with HMAC-SHA256 or sends a secret header works today, described in its connection.
+
 ```python
 @dag(schedule=Asset("demo/billing/deployed"))
 def smoke_test_billing(): ...
@@ -103,16 +106,27 @@ machine running the Airflow API server (Airflow 3.1.1 or later).
 
 Connections are read on every delivery, so adding or changing a webhook later needs no restart.
 
-## Connect GitHub, GitLab or Jira
+## Connect a service
 
 Every service takes the same steps: in Airflow, create a connection holding a secret; in the service,
 add a webhook with that secret; then, in Airflow, schedule a Dag on one of its events.
 
+| Service | Source type | Setup |
+|---|---|---|
+| GitHub | `github`, built in | [Connect GitHub](#connect-github) |
+| GitLab | `gitlab`, built in | [Connect GitLab](#connect-gitlab) |
+| Jira | `jira`, built in | [Connect Jira](#connect-jira) |
+| Any service that signs the body with HMAC-SHA256 | `hmac_json`, described in the connection | [Connect any other service](#connect-any-other-service) |
+| Any service that sends a secret in a header | `token_header`, described in the connection | [Connect any other service](#connect-any-other-service) |
+
+More built-in services are on the way. To ask for one, [open a feature request](https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/issues/new?template=feature_request.yml)
+with a link to the service's webhook documentation.
+
 Before you start:
 
 - The plugin is installed on the API server: [Quick start](#quick-start), step 1.
-- The service can reach the API server. GitHub.com, GitLab.com and Jira Cloud need a public HTTPS
-  address: put a reverse proxy in front of the API server that forwards only `/webhooks/*` (see
+- The service can reach the API server. A cloud service, such as GitHub.com, GitLab.com or Jira
+  Cloud, needs a public HTTPS address: put a reverse proxy in front of the API server that forwards only `/webhooks/*` (see
   [Security](#security)). `<your-airflow>` below stands for that address.
 
 ### Connect GitHub
@@ -223,6 +237,50 @@ Before you start:
    log: it reports a delivery whose secret does not match, or a misconfigured connection. Otherwise
    check that *Exclude body* is unchecked and that the Dag is unpaused.
 
+### Connect any other service
+
+For a service without a built-in source type, such as a deploy tool named `deploybot` here, you
+describe its deliveries in the connection.
+
+**In the service's webhook documentation**, find:
+
+| What | For example | Connection option |
+|---|---|---|
+| How it authenticates deliveries | An HMAC-SHA256 signature of the body, or the secret itself, in a header | `source_type`: `hmac_json` or `token_header` |
+| The header, and any text before the signature or secret | `X-Signature: sha256=<hex>` | `signature_header` and `signature_prefix`, or `token_header` and `token_prefix` |
+| Where the event is named | `{"type": "deployed"}` in the body, or a header | `event_field` or `event_header` |
+| Optionally, where a project or service is named | `{"service": "billing"}` | `path_field` |
+
+**In Airflow**
+
+1. Create the connection `webhook_deploybot` with a new secret and those options, and copy the secret
+   it prints:
+
+   ```bash
+   SECRET="$(openssl rand -hex 32)" && echo "$SECRET"
+   airflow connections add webhook_deploybot --conn-type inbound_webhook --conn-password "$SECRET" \
+     --conn-extra '{"source_type": "hmac_json", "signature_header": "X-Signature",
+                    "signature_prefix": "sha256=", "event_field": "type", "path_field": "service"}'
+   ```
+
+   [`hmac_json`](#hmac_json-services-that-sign-the-body) and
+   [`token_header`](#token_header-services-that-send-a-secret-header) list every option, and the
+   **Inbound Webhook** connection form in the Airflow UI has a field for each.
+
+**In the service**
+
+2. Add a webhook with the URL `https://<your-airflow>/webhooks/deploybot` and the secret from step 1,
+   sending JSON.
+
+**In Airflow**
+
+3. Add a Dag that schedules on an event, such as `Asset("deploybot/billing/deployed")`, and unpause
+   it. To find a name, send the event once and copy one of the `candidates` from the response, or see
+   [Event names](#event-names).
+
+A service whose signature covers more than the body, such as a timestamp, or that needs a handshake
+when the webhook is registered, needs a built-in source type: see [Other services](#other-services).
+
 ## How it works
 
 ```mermaid
@@ -296,8 +354,10 @@ names on MySQL.
 
 ## Source types
 
-The connection's `source_type` decides how deliveries are verified and named. It defaults to the
-webhook name, so `webhook_github` and `webhook_gitlab` need nothing but a password.
+The connection's `source_type` decides how deliveries are verified and named. `hmac_json` and
+`token_header` work with any service and are configured through connection options; the others are
+built in for one service each. It defaults to the webhook name, so `webhook_github`,
+`webhook_gitlab` and `webhook_jira` need nothing but a password.
 
 | `source_type` | Authentication | Path | Event / action / detail |
 |---|---|---|---|
@@ -403,9 +463,13 @@ send the secret in a header for `token_header` instead.
 
 ### Other services
 
-A service whose signature covers more than the body (for example a timestamp plus the body), or that
-needs a verification handshake when the webhook is registered, needs its own source type. A source
-type is a small class with `verify()` and `parse()`; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Built-in source types for more services are on the way. A service needs one when its signature
+covers more than the body (for example a timestamp plus the body), when it needs a verification
+handshake as the webhook is registered, or to name its events in more detail than one field.
+
+To ask for a service, [open a feature request](https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/issues/new?template=feature_request.yml) with a link
+to its webhook documentation. To add one yourself: a source type is a small class with `verify()`
+and `parse()`; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Writing Dags
 
