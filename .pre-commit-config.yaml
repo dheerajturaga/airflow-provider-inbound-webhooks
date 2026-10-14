@@ -169,6 +169,8 @@ repos:
           \bslave\b|
           \bsanity\b|
           \bdummy\b
+        # Text files only: the bytes of an image can match a word by chance.
+        types: [text]
         exclude: ^(\.pre-commit-config\.yaml|LICENSE)$
       - id: check-zip-file-is-not-committed
         name: Check no zip files are committed
