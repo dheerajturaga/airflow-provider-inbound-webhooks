@@ -34,6 +34,8 @@ class WebhookEvent:
     :param kinds: What happened, each from broad to specific
         (``("pull_request", "labeled", "deploy-preview")``). Every prefix of every kind is a
         candidate asset name, so one delivery can be subscribed to at several levels.
+    :param payload: What each asset event stores as ``extra["payload"]``: the body, or a summary of
+        it for senders whose bodies are large.
     """
 
     path: str | None
@@ -188,6 +190,92 @@ class GitLabSource(WebhookSource):
         )
 
 
+STORED_PAYLOADS = ("summary", "full")
+# Kept in a summary's issue.fields; the full issue repeats every field, custom fields included.
+JIRA_SUMMARY_FIELDS = frozenset(
+    {
+        "project",
+        "issuetype",
+        "status",
+        "summary",
+        "labels",
+        "priority",
+        "assignee",
+        "resolution",
+        "fixVersions",
+        "parent",
+    }
+)
+
+
+@dataclass(frozen=True, kw_only=True)
+class JiraSource(WebhookSource):
+    """
+    Jira Cloud and Jira Data Center webhooks with a secret, which sign the body like GitHub does.
+
+    Kinds use ``webhookEvent`` without its ``jira:`` prefix. The detail is the issue type for
+    ``issue_created``. ``issue_updated`` offers a kind per field in the changelog,
+    ``(issue_updated, <field>)``, with the new status for ``status`` and, as for GitLab, a derived
+    ``(issue_updated, "labeled", <label>)`` for each label added. The path is the project key.
+
+    Every delivery carries the whole issue, so by default only a summary is stored:
+    ``store_payload`` set to ``full`` stores the body as received.
+    """
+
+    store_payload: str = "summary"
+
+    @classmethod
+    def from_extra(cls, extra: dict[str, Any]) -> JiraSource:
+        store_payload = extra.get("store_payload", "summary")
+        if store_payload not in STORED_PAYLOADS:
+            raise ValueError(f"jira store_payload must be one of {STORED_PAYLOADS}")
+        return cls(store_payload=store_payload)
+
+    def verify(self, headers: Headers, body: bytes, secret: str) -> None:
+        verify_hmac_sha256(headers.get("X-Hub-Signature"), secret, body, prefix="sha256=")
+
+    def parse(self, headers: Headers, body: bytes) -> WebhookEvent:
+        payload = load_json_object(headers, body)
+        webhook_event = payload.get("webhookEvent")
+        if not isinstance(webhook_event, str) or not webhook_event:
+            raise ValueError("Missing webhookEvent")
+        event = webhook_event.removeprefix("jira:")
+        kind: tuple[str, ...] = (event,)
+        if event == "issue_created" and (issue_type := get_field(payload, "issue.fields.issuetype.name")):
+            kind = (*kind, issue_type)
+        return WebhookEvent(
+            path=get_field(payload, "issue.fields.project.key") or get_field(payload, "project.key"),
+            kinds=list(dict.fromkeys([kind, *self.find_changes(event, payload)])),
+            delivery_id=headers.get("X-Atlassian-Webhook-Identifier"),
+            payload=payload if self.store_payload == "full" else self.summarize(payload),
+        )
+
+    @staticmethod
+    def find_changes(event: str, payload: dict[str, Any]) -> list[tuple[str, ...]]:
+        changes: list[tuple[str, ...]] = []
+        for item in get_field(payload, "changelog.items") or []:
+            if not (field := item.get("field")):
+                continue
+            if field == "status" and (status := item.get("toString")):
+                changes.append((event, field, status))
+            else:
+                changes.append((event, field))
+            if field == "labels":
+                # Jira labels cannot contain spaces, so the changelog lists them space-separated.
+                previous = set((item.get("fromString") or "").split())
+                current = (item.get("toString") or "").split()
+                changes.extend((event, "labeled", label) for label in current if label not in previous)
+        return changes
+
+    @staticmethod
+    def summarize(payload: dict[str, Any]) -> dict[str, Any]:
+        issue = payload.get("issue")
+        if not isinstance(issue, dict) or not isinstance(fields := issue.get("fields"), dict):
+            return payload
+        summary_fields = {key: value for key, value in fields.items() if key in JIRA_SUMMARY_FIELDS}
+        return {**payload, "issue": {**issue, "fields": summary_fields}}
+
+
 @dataclass(frozen=True, kw_only=True)
 class ConfiguredJsonSource(WebhookSource):
     """
@@ -297,6 +385,7 @@ class TokenHeaderSource(ConfiguredJsonSource):
 SOURCE_TYPES: dict[str, type[WebhookSource]] = {
     "github": GitHubSource,
     "gitlab": GitLabSource,
+    "jira": JiraSource,
     "hmac_json": HmacJsonSource,
     "token_header": TokenHeaderSource,
 }

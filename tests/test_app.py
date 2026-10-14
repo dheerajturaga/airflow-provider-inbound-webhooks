@@ -149,6 +149,40 @@ def test_gitlab_label_added_to_merge_request(client, session, subscribe):
     assert get_queued_dag_ids(session) == {"api_deploy_preview"}
 
 
+@mock.patch.dict(os.environ, build_conn_env("jira"))
+def test_jira_transition_stores_issue_summary(client, session, subscribe):
+    subscribe("deploy_ready_issues", "jira/*/issue_updated/status/Ready for Deploy")
+    payload = {
+        "webhookEvent": "jira:issue_updated",
+        "issue": {
+            "key": "OPS-42",
+            "fields": {"project": {"key": "OPS"}, "description": "A long description"},
+        },
+        "changelog": {"items": [{"field": "status", "toString": "Ready for Deploy"}]},
+    }
+    body = json.dumps(payload).encode()
+
+    response = client.post(
+        "/jira",
+        content=body,
+        headers={
+            "content-type": "application/json; charset=UTF-8",
+            "X-Hub-Signature": f"sha256={hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()}",
+            "X-Atlassian-Webhook-Identifier": "webhook-1",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "accepted"
+    assert get_queued_dag_ids(session) == {"deploy_ready_issues"}
+    assert session.scalars(select(AssetEvent.extra)).first() == {
+        "source": "jira",
+        "path": "OPS",
+        "delivery_id": "webhook-1",
+        "payload": {**payload, "issue": {"key": "OPS-42", "fields": {"project": {"key": "OPS"}}}},
+    }
+
+
 @mock.patch.dict(os.environ, DEPLOYBOT_CONN)
 def test_any_hmac_service_configured_from_connection_extra(client, session, subscribe):
     subscribe("smoke_test_billing", "deploybot/billing/deployed")

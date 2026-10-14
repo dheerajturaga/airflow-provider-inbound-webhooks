@@ -201,6 +201,7 @@ def test_connection_form_is_served(api_server_url, api_token):
         "token_header",
         "github",
         "gitlab",
+        "jira",
     ]
     assert hook["standard_fields"]["password"]["title"] == "Shared secret"
     assert all(hook["standard_fields"][field]["hidden"] for field in ("host", "port", "login"))

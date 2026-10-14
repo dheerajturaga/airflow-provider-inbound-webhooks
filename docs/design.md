@@ -63,7 +63,8 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
 
 1. **Replay protection.** GitHub signs the body but not a timestamp; GitLab sends a bare token.
    Deduplicating on the delivery ID needs a store; source types whose signature covers a timestamp
-   could reject old deliveries.
+   could reject old deliveries. Jira's does, through the `timestamp` in the signed body, but Jira
+   Cloud retries a failed delivery for more than an hour, so the window would have to be as long.
 2. **Cost of unauthenticated requests.** Any `/webhooks/<name>` request triggers a connection lookup
    before it can be rejected, which may hit a remote secrets backend. Cache lookups, or list the
    enabled names in configuration?
@@ -72,8 +73,9 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
    other components only pay for FastAPI and building the app, about 70 ms on Airflow 3.3. Avoiding
    that too would mean giving Airflow a lazily built app rather than the FastAPI app `fastapi_apps`
    is documented to take.
-4. **Payload retention.** Each recorded asset event stores the full payload. Should source types
-   store a summary?
+4. **Payload retention.** Each recorded asset event stores the full payload, except that `jira`
+   stores a summary by default, because every Jira delivery carries the whole issue. Should other
+   source types store a summary too?
 5. **Audit.** The REST API writes an action log entry per user; a delivery has no user.
 6. **Name stability.** Renaming a repository or project changes its event names.
 7. **Source types from other packages.** `SOURCE_TYPES` is a fixed dictionary; other packages could

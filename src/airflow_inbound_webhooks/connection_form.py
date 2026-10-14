@@ -34,7 +34,7 @@ FIELDS = (
         "Source type",
         "How deliveries are verified and named. Leave empty to use the webhook name, so that "
         "webhook_github is the github source type.",
-        choices=("hmac_json", "token_header", "github", "gitlab"),
+        choices=("hmac_json", "token_header", "github", "gitlab", "jira"),
     ),
     FormField(
         "signature_header",
@@ -78,6 +78,13 @@ FIELDS = (
         "Path field",
         "hmac_json and token_header, optional: dotted path to a value that becomes the event's path, "
         "such as a service or project name.",
+    ),
+    FormField(
+        "store_payload",
+        "Stored payload",
+        "jira: what each asset event stores of the delivery. summary (default) keeps the issue's key "
+        "fields and the changelog; full keeps the whole issue.",
+        choices=("summary", "full"),
     ),
     FormField(
         "team_name",

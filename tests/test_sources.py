@@ -14,6 +14,7 @@ from airflow_inbound_webhooks.sources import (
     GitHubSource,
     GitLabSource,
     HmacJsonSource,
+    JiraSource,
     TokenHeaderSource,
     WebhookVerificationError,
 )
@@ -174,6 +175,148 @@ class TestGitLabSource:
     def test_parse_rejects_missing_object_kind(self):
         with pytest.raises(ValueError, match="object_kind"):
             parse_json(GitLabSource(), {})
+
+
+class TestJiraSource:
+    ISSUE = {
+        "id": "10042",
+        "key": "OPS-42",
+        "fields": {
+            "project": {"key": "OPS"},
+            "issuetype": {"name": "Bug"},
+            "status": {"name": "Ready for Deploy"},
+            "summary": "Checkout fails",
+            "description": "A long description",
+            "customfield_10016": 5,
+        },
+    }
+
+    def test_verify_accepts_valid_signature(self):
+        JiraSource().verify(Headers({"X-Hub-Signature": f"sha256={compute_hex_signature()}"}), BODY, SECRET)
+
+    def test_verify_accepts_atlassian_example_signature(self):
+        signature = "sha256=a4771c39fbe90f317c7824e83ddef3caae9cb3d976c214ace1f2937e133263c9"
+
+        JiraSource().verify(
+            Headers({"X-Hub-Signature": signature}), b"Hello World!", "It's a Secret to Everybody"
+        )
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            pytest.param({}, id="missing"),
+            pytest.param({"X-Hub-Signature": compute_hex_signature()}, id="missing-prefix"),
+            pytest.param(
+                {"X-Hub-Signature": f"sha256={compute_hex_signature(secret='wrong')}"}, id="wrong-secret"
+            ),
+            pytest.param({"X-Hub-Signature-256": f"sha256={compute_hex_signature()}"}, id="github-header"),
+        ],
+    )
+    def test_verify_rejects(self, headers):
+        with pytest.raises(WebhookVerificationError):
+            JiraSource().verify(Headers(headers), BODY, SECRET)
+
+    @pytest.mark.parametrize(
+        ("payload", "expected_path", "expected_kinds"),
+        [
+            pytest.param(
+                {"webhookEvent": "jira:issue_created", "issue": ISSUE},
+                "OPS",
+                [("issue_created", "Bug")],
+                id="issue-created",
+            ),
+            pytest.param(
+                {
+                    "webhookEvent": "jira:issue_updated",
+                    "issue": ISSUE,
+                    "changelog": {
+                        "items": [
+                            {"field": "status", "fromString": "In Progress", "toString": "Ready for Deploy"},
+                            {"field": "labels", "fromString": "backend", "toString": "backend deploy"},
+                            {"field": "Story Points", "fromString": None, "toString": "5"},
+                        ]
+                    },
+                },
+                "OPS",
+                [
+                    ("issue_updated",),
+                    ("issue_updated", "status", "Ready for Deploy"),
+                    ("issue_updated", "labels"),
+                    ("issue_updated", "labeled", "deploy"),
+                    ("issue_updated", "Story Points"),
+                ],
+                id="issue-updated",
+            ),
+            pytest.param(
+                {
+                    "webhookEvent": "jira:issue_updated",
+                    "issue": ISSUE,
+                    "changelog": {"items": [{"field": "labels", "fromString": "backend", "toString": ""}]},
+                },
+                "OPS",
+                [("issue_updated",), ("issue_updated", "labels")],
+                id="label-removed",
+            ),
+            pytest.param(
+                {"webhookEvent": "comment_created", "issue": ISSUE, "comment": {"body": "Looks good"}},
+                "OPS",
+                [("comment_created",)],
+                id="comment",
+            ),
+            pytest.param(
+                {"webhookEvent": "project_created", "project": {"key": "NEW"}},
+                "NEW",
+                [("project_created",)],
+                id="project",
+            ),
+            pytest.param(
+                {"webhookEvent": "sprint_started", "sprint": {"id": 7, "originBoardId": 3}},
+                None,
+                [("sprint_started",)],
+                id="no-project-key",
+            ),
+        ],
+    )
+    def test_parse(self, payload, expected_path, expected_kinds):
+        parsed = parse_json(JiraSource(), payload, **{"X-Atlassian-Webhook-Identifier": "w-1"})
+
+        assert (parsed.path, parsed.kinds, parsed.delivery_id) == (expected_path, expected_kinds, "w-1")
+
+    def test_summary_keeps_key_issue_fields(self):
+        changelog = {"items": [{"field": "status", "toString": "Ready for Deploy"}]}
+        payload = {"webhookEvent": "jira:issue_updated", "issue": self.ISSUE, "changelog": changelog}
+
+        parsed = parse_json(JiraSource(), payload)
+
+        assert parsed.payload == {
+            "webhookEvent": "jira:issue_updated",
+            "issue": {
+                "id": "10042",
+                "key": "OPS-42",
+                "fields": {
+                    "project": {"key": "OPS"},
+                    "issuetype": {"name": "Bug"},
+                    "status": {"name": "Ready for Deploy"},
+                    "summary": "Checkout fails",
+                },
+            },
+            "changelog": changelog,
+        }
+
+    def test_full_payload_is_stored_as_received(self):
+        payload = {"webhookEvent": "jira:issue_created", "issue": self.ISSUE}
+
+        parsed = parse_json(JiraSource.from_extra({"store_payload": "full"}), payload)
+
+        assert parsed.payload == payload
+
+    def test_from_extra_rejects_unknown_store_payload(self):
+        with pytest.raises(ValueError, match="jira store_payload"):
+            JiraSource.from_extra({"store_payload": "none"})
+
+    def test_parse_rejects_missing_webhook_event(self):
+        with pytest.raises(ValueError, match="webhookEvent"):
+            parse_json(JiraSource(), {"issue": self.ISSUE})
 
 
 class TestHmacJsonSource:

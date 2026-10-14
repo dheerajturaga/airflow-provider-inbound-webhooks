@@ -27,7 +27,7 @@ body:
     id: source-type
     attributes:
       label: Source type
-      options: [hmac_json, token_header, github, gitlab, other or unsure]
+      options: [hmac_json, token_header, github, gitlab, jira, other or unsure]
     validations:
       required: true
   - type: textarea

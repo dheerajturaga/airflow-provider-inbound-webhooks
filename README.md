@@ -178,6 +178,7 @@ webhook name, so `webhook_github` and `webhook_gitlab` need nothing but a passwo
 | `token_header` | Shared secret in a header | `path_field` value | `event_field` or `event_header` value |
 | `github` | `X-Hub-Signature-256` | `org/repo`, or `org/*` for organization events | see [`github`](#github) |
 | `gitlab` | `X-Gitlab-Token` | `group/subgroup/project` | see [`gitlab`](#gitlab) |
+| `jira` | `X-Hub-Signature` | project key | see [`jira`](#jira) |
 
 ### `hmac_json`: services that sign the body
 
@@ -226,6 +227,55 @@ Names use the payload's `object_kind`, then `object_attributes.action` (or its `
 pipelines). The detail is the branch for `push` and the tag for `tag_push`. GitLab has no label
 events, so a label added to a merge request or issue is reported as `<object_kind>/labeled/<label>`.
 
+### `jira`
+
+Jira Cloud and Jira Data Center. As a Jira administrator, create a webhook (in Jira Cloud under
+Settings → System → WebHooks) with the URL `https://<api-server>/webhooks/jira` and the connection's
+password as its secret. Leave **Exclude body** unchecked, since events are named from the body.
+Webhooks that Connect or OAuth 2.0 apps register are authenticated differently and not supported.
+
+Names use the payload's `webhookEvent` without its `jira:` prefix, under the issue's project key.
+The detail is the issue type for `issue_created`. `issue_updated` offers a name for each field in
+the changelog, with the new status for status changes and, as for GitLab,
+`issue_updated/labeled/<label>` for each label added. Moving an issue of project `OPS` to *Ready for
+Deploy* and adding the label `hotfix` offers:
+
+```text
+jira/OPS/issue_updated                            any change to an OPS issue
+jira/*/issue_updated                              ... in any project
+jira/OPS/issue_updated/status                     any transition
+jira/*/issue_updated/status
+jira/OPS/issue_updated/status/Ready for Deploy    moved to Ready for Deploy
+jira/*/issue_updated/status/Ready for Deploy
+jira/OPS/issue_updated/labels                     any change to the labels
+jira/*/issue_updated/labels
+jira/OPS/issue_updated/labeled                    any label added
+jira/*/issue_updated/labeled
+jira/OPS/issue_updated/labeled/hotfix             the hotfix label added
+jira/*/issue_updated/labeled/hotfix
+```
+
+Field names are the changelog's, such as `Story Points` for a custom field. Events about neither an
+issue nor a project, such as `sprint_started`, have no path: `jira/sprint_started`.
+
+Jira sends the whole issue, every custom field included, with each delivery. So each asset event
+stores a summary: the payload with the issue's fields reduced to `project`, `issuetype`, `status`,
+`summary`, `labels`, `priority`, `assignee`, `resolution`, `fixVersions` and `parent`. The
+changelog and the rest of the payload are kept. A Dag that needs other fields can fetch the issue
+from Jira, which also gives its current state, or the connection can store the whole payload:
+
+| Extra field | Required | Meaning |
+|---|---|---|
+| `store_payload` | no | `summary` (default) or `full` |
+
+Jira sends `issue_updated` for every edit, so select only the events your Dags need and narrow the
+webhook with a JQL filter such as `project = OPS`. Jira Cloud retries a delivery that fails or times
+out, so a Dag may occasionally see one twice. Its `delivery_id`, Jira Cloud's
+`X-Atlassian-Webhook-Identifier`, stays the same across retries.
+
+On a Jira without webhook secrets, an Automation for Jira rule with a "Send web request" action can
+send the secret in a header for `token_header` instead.
+
 ### Other services
 
 A service whose signature covers more than the body (for example a timestamp plus the body), or that
@@ -235,7 +285,7 @@ type is a small class with `verify()` and `parse()`; see [CONTRIBUTING.md](CONTR
 ## Writing Dags
 
 Schedule on an event name and read the delivery from `triggering_asset_events`. Each event's
-`extra` holds the full payload:
+`extra` holds the payload, or for Jira a summary of it:
 
 ```python
 from airflow.sdk import Asset, dag, task
@@ -262,7 +312,8 @@ Events are not ordered; sort by `event.timestamp` if order matters. `extra` also
 `path` and `delivery_id` (where the service sends one).
 
 More examples, for GitHub labels and pushes, organization-wide releases and GitLab pipelines, are in
-[`examples/dags/ci_cd.py`](examples/dags/ci_cd.py).
+[`examples/dags/ci_cd.py`](examples/dags/ci_cd.py), and for Jira transitions and new issues in
+[`examples/dags/jira_issues.py`](examples/dags/jira_issues.py).
 
 ## Reference
 
@@ -330,7 +381,8 @@ Python 3.11. Each test run starts the real `airflow api-server` and sends it sig
 ## Limitations
 
 - No replay protection.
-- Each recorded asset event stores the full delivery payload.
+- Each recorded asset event stores the full delivery payload, except that `jira` stores a summary
+  by default.
 - Asset events from webhooks are not written to Airflow's audit log, because a delivery has no
   Airflow user.
 - Renaming a repository, project or service changes its event names, so Dags must be updated.

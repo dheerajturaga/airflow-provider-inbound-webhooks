@@ -15,6 +15,9 @@ All notable changes are documented here. The format follows
   secret, and the extra selects and configures the source type.
 - Source types `hmac_json` (HMAC-SHA256 body signatures, hex or base64), `token_header` (shared
   secret in a header), `github` and `gitlab`.
+- Source type `jira`, for Jira Cloud and Data Center webhooks with a secret. It names events after
+  status transitions, added labels and changed fields, and stores a summary of the issue unless
+  `store_payload` is `full`.
 - The event naming rule `<webhook name>/<path>/<event>/<action>/<detail>`, with every prefix and a
   `*` path wildcard subscribable, and the offered names returned as `candidates`.
 - Multi-team attribution through `team_name` on Airflow 3.3 and later.
