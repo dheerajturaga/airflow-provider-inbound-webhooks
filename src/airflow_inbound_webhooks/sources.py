@@ -83,9 +83,14 @@ def verify_hmac_sha256(
     if received is None or not received.startswith(prefix):
         raise WebhookVerificationError("Missing or malformed signature header")
     digest = hmac.new(secret.encode(), body, hashlib.sha256).digest()
-    expected = digest.hex() if encoding == "hex" else base64.b64encode(digest).decode()
+    received_digest = received[len(prefix) :]
+    if encoding == "hex":
+        # Hex digits are case-insensitive, and some senders write them in uppercase.
+        expected, received_digest = digest.hex(), received_digest.lower()
+    else:
+        expected = base64.b64encode(digest).decode()
     # compare_digest raises TypeError on non-ASCII str, and header values are attacker-controlled.
-    if not hmac.compare_digest(received[len(prefix) :].encode(), expected.encode()):
+    if not hmac.compare_digest(received_digest.encode(), expected.encode()):
         raise WebhookVerificationError("Signature does not match")
 
 
@@ -103,6 +108,15 @@ def get_field(payload: dict[str, Any], dotted_path: str) -> Any:
     for key in dotted_path.split("."):
         value = value.get(key) if isinstance(value, dict) else None
     return value
+
+
+def get_label_titles(labels: Any) -> list[str]:
+    # A malformed entry is skipped rather than failing the delivery, whose event is still valid.
+    if not isinstance(labels, list):
+        return []
+    return [
+        label["title"] for label in labels if isinstance(label, dict) and isinstance(label.get("title"), str)
+    ]
 
 
 class GitHubSource(WebhookSource):
@@ -176,11 +190,11 @@ class GitLabSource(WebhookSource):
             kind = (*kind, ref.removeprefix("refs/heads/"))
         elif event == "tag_push" and ref.startswith("refs/tags/"):
             kind = (*kind, ref.removeprefix("refs/tags/"))
-        previous = {label["title"] for label in get_field(payload, "changes.labels.previous") or []}
+        previous = set(get_label_titles(get_field(payload, "changes.labels.previous")))
         added = [
-            label["title"]
-            for label in get_field(payload, "changes.labels.current") or []
-            if label["title"] not in previous
+            title
+            for title in get_label_titles(get_field(payload, "changes.labels.current"))
+            if title not in previous
         ]
         return WebhookEvent(
             path=get_field(payload, "project.path_with_namespace"),

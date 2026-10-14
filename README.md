@@ -257,7 +257,8 @@ Before you start:
    starts a run. Jira does not show webhook responses, so if nothing happens, check the API server
    log: it reports a delivery whose secret does not match, or a misconfigured connection. Otherwise
    check that `jira` is in `webhook_names`, that *Exclude body* is unchecked and that the Dag is
-   unpaused.
+   unpaused. With `[logging] logging_level = DEBUG` on the API server, the log also lists the names a
+   delivery offered when no Dag schedules on any of them.
 
 ### Connect any other service
 
@@ -350,25 +351,32 @@ paused, and asset expressions such as `a | b` work as usual.
 ## Event names
 
 Every delivery is named `<webhook name>/<path>/<event>/<action>/<detail>`, and every prefix of that
-name can be subscribed to. Each prefix is also offered with the last path segment replaced by `*`.
-For the quick start delivery the names are:
+name can be subscribed to. Each prefix is also offered with `*` in place of each trailing part of
+the path, so `*` stands for anything below that point. For the quick start delivery the names are:
 
 ```text
 demo/billing/deployed     billing deployments
 demo/*/deployed           deployments of any service
 ```
 
-When a label is added to a pull request, the built-in GitHub source offers six names, from broad to
+When a label is added to a pull request, the built-in GitHub source offers nine names, from broad to
 specific:
 
 ```text
 github/my-org/web/pull_request                           any pull request activity in my-org/web
 github/my-org/*/pull_request                             ... in any repository of my-org
+github/*/pull_request                                    ... in any repository
 github/my-org/web/pull_request/labeled                   any label added
 github/my-org/*/pull_request/labeled
+github/*/pull_request/labeled
 github/my-org/web/pull_request/labeled/deploy-preview    the deploy-preview label added
 github/my-org/*/pull_request/labeled/deploy-preview
+github/*/pull_request/labeled/deploy-preview
 ```
+
+Deeper paths work the same way. For a GitLab project `platform/backend/api`,
+`gitlab/platform/backend/*/...` covers the `backend` subgroup, `gitlab/platform/*/...` the whole
+`platform` group, subgroups included, and `gitlab/*/...` every project.
 
 **Finding a name:** every response lists the names it offered as `candidates`, so send the event
 once and copy one. A delivery that matches no subscribed name is answered with
@@ -377,6 +385,13 @@ once and copy one. A delivery that matches no subscribed name is answered with
 Non-ASCII characters are folded (`🚀 deploy` → `deploy`), because Airflow rejects non-ASCII asset
 names on MySQL.
 
+**Stability:** event names are part of this package's interface, because a Dag whose name stops
+matching does not fail; it just stops running. From 0.1.0, changing a name that an existing delivery
+produces, for example how it is normalized or what its detail is, is a breaking change. Below 1.0 it
+ships only in a new minor version, and the [changelog](CHANGELOG.md) lists the old and new names
+under "Changed event names". Adding names, such as a detail for an event that had none, is not a
+breaking change, because the shorter names are still offered.
+
 ## Source types
 
 The connection's `source_type` decides how deliveries are verified and named. `hmac_json` and
@@ -384,13 +399,17 @@ The connection's `source_type` decides how deliveries are verified and named. `h
 built in for one service each. It defaults to the webhook name, so `webhook_github`,
 `webhook_gitlab` and `webhook_jira` need nothing but a password.
 
-| `source_type` | Authentication | Path | Event / action / detail |
-|---|---|---|---|
-| `hmac_json` | HMAC-SHA256 signature of the body | `path_field` value | `event_field` or `event_header` value |
-| `token_header` | Shared secret in a header | `path_field` value | `event_field` or `event_header` value |
-| `github` | `X-Hub-Signature-256` | `org/repo`, or `org/*` for organization events | see [`github`](#github) |
-| `gitlab` | `X-Gitlab-Token` | `group/subgroup/project` | see [`gitlab`](#gitlab) |
-| `jira` | `X-Hub-Signature` | project key | see [`jira`](#jira) |
+| `source_type` | Authentication | Path | Event / action / detail | Stored payload |
+|---|---|---|---|---|
+| `hmac_json` | HMAC-SHA256 signature of the body | `path_field` value | `event_field` or `event_header` value | The body |
+| `token_header` | Shared secret in a header | `path_field` value | `event_field` or `event_header` value | The body |
+| `github` | `X-Hub-Signature-256` | `org/repo`, or `org/*` for organization events | see [`github`](#github) | The body |
+| `gitlab` | `X-Gitlab-Token` | `group/subgroup/project` | see [`gitlab`](#gitlab) | The body |
+| `jira` | `X-Hub-Signature` | project key | see [`jira`](#jira) | A summary; see [`jira`](#jira) |
+
+Each asset event stores the delivery's body as `extra["payload"]`, as received, unless every
+delivery also carries a full copy of the object it is about. Of the built-in services only Jira does,
+sending the whole issue each time, so `jira` stores a summary by default.
 
 ### `hmac_json`: services that sign the body
 
@@ -431,7 +450,8 @@ Names use GitHub's own event and action names. The detail is the label for `labe
 ### `gitlab`
 
 GitLab.com and self-managed GitLab. Group webhooks cover every project in a group (a GitLab Premium
-feature); otherwise add the webhook per project. GitLab sends the secret token itself rather than
+feature); otherwise add the webhook per project. To subscribe to every project in a group,
+subgroups included, use `gitlab/<group>/*/...`. GitLab sends the secret token itself rather than
 signing the body.
 
 Names use the payload's `object_kind`, then `object_attributes.action` (or its `status`, for
@@ -523,7 +543,8 @@ on_any_deployment()
 Iterate over all events rather than taking the first: before Airflow 3.4, and on any Dag with
 `batch_asset_events`, deliveries that arrive before the scheduler creates a run share that run.
 Events are not ordered; sort by `event.timestamp` if order matters. `extra` also holds `source`,
-`path` and `delivery_id` (where the service sends one).
+`path` and `delivery_id` (where the service sends one). Anyone who can read asset events can read
+the payload too; see [Security](#security).
 
 More examples, for GitHub labels and pushes, organization-wide releases and GitLab pipelines, are in
 [`examples/dags/ci_cd.py`](examples/dags/ci_cd.py), and for Jira transitions and new issues in
@@ -565,7 +586,7 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
 | Status | Meaning | What to check |
 |---|---|---|
 | `202` `accepted` | Recorded; `asset_events` lists the asset event per subscribed name | If no Dag run starts, the Dag is paused |
-| `202` `no_subscribers` | Verified, but no Dag schedules on any of the `candidates`; nothing stored | The Dag schedules on one of the `candidates` and has been parsed: `airflow dags reserialize` parses it now |
+| `202` `no_subscribers` | Verified, but no Dag schedules on any of the `candidates`; nothing stored | The Dag schedules on one of the `candidates` and has been parsed: `airflow dags reserialize` parses it now. The API server logs the `candidates` at debug level |
 | `400` | The body is not a JSON object, or the event name is missing | GitHub: the content type is `application/json`. Jira: *Exclude body* is unchecked |
 | `401` | Signature or token does not match | The secret in the service equals the connection's password |
 | `404` | No such webhook: the name is not in `webhook_names`, or has no `webhook_<name>` connection | The name is in `webhook_names` and the API server was restarted after it changed; the connection ID is `webhook_` plus the name in the URL |
@@ -591,6 +612,10 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
 - **Use strong secrets, ideally from a secrets backend,** which keeps them out of the metadata
   database. After rotating one, deliveries signed with the new secret are refused until the cached
   connection expires (`connection_cache_ttl`); redeliver them from the service's delivery log.
+- **Payloads are visible to anyone who can read asset events.** Each asset event stores its
+  delivery's payload, and the Airflow UI and REST API show it to every user allowed to read assets,
+  not only to the Dags that subscribe. GitHub push payloads, for example, include each commit
+  author's name and email address. `jira` stores only a summary of the issue by default.
 - **No replay protection yet.** A captured delivery can be sent again. Signatures over a timestamp
   would allow rejecting old deliveries; see [docs/design.md](docs/design.md).
 - Bodies larger than `max_body_bytes` are refused before verification.
@@ -613,7 +638,7 @@ Python 3.11. Each test run starts the real `airflow api-server` and sends it sig
 
 - No replay protection.
 - Each recorded asset event stores the full delivery payload, except that `jira` stores a summary
-  by default.
+  by default, and anyone who can read asset events can see it.
 - Asset events from webhooks are not written to Airflow's audit log, because a delivery has no
   Airflow user.
 - Renaming a repository, project or service changes its event names, so Dags must be updated.

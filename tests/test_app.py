@@ -110,6 +110,7 @@ def connection_lookups():
 def test_github_label_triggers_only_subscribed_dags(client, session, subscribe):
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
     subscribe("org_deploy_preview", "github/my-org/*/pull_request/labeled/deploy-preview")
+    subscribe("any_deploy_preview", "github/*/pull_request/labeled/deploy-preview")
     subscribe("deploy_staging", "github/my-org/web/push/main")
 
     response = post_github(client)
@@ -120,9 +121,10 @@ def test_github_label_triggers_only_subscribed_dags(client, session, subscribe):
     assert body["asset_events"].keys() == {
         "github/my-org/web/pull_request/labeled/deploy-preview",
         "github/my-org/*/pull_request/labeled/deploy-preview",
+        "github/*/pull_request/labeled/deploy-preview",
     }
-    assert len(body["candidates"]) == 6
-    assert get_queued_dag_ids(session) == {"web_deploy_preview", "org_deploy_preview"}
+    assert len(body["candidates"]) == 9
+    assert get_queued_dag_ids(session) == {"web_deploy_preview", "org_deploy_preview", "any_deploy_preview"}
     assert session.scalars(select(AssetEvent.extra)).first() == {
         "source": "github",
         "path": "my-org/web",
@@ -142,13 +144,28 @@ def test_no_subscribers_is_acknowledged_with_candidates(client, session):
         "candidates": [
             "github/my-org/web/pull_request",
             "github/my-org/*/pull_request",
+            "github/*/pull_request",
             "github/my-org/web/pull_request/labeled",
             "github/my-org/*/pull_request/labeled",
+            "github/*/pull_request/labeled",
             "github/my-org/web/pull_request/labeled/deploy-preview",
             "github/my-org/*/pull_request/labeled/deploy-preview",
+            "github/*/pull_request/labeled/deploy-preview",
         ],
     }
     assert count_asset_events(session) == 0
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_no_subscribers_logs_candidates_at_debug_level(client, caplog):
+    caplog.set_level(logging.DEBUG, logger=app.__name__)
+
+    candidates = post_github(client).json()["candidates"]
+
+    records = [record for record in caplog.records if record.name == app.__name__]
+    assert [(record.levelno, record.getMessage()) for record in records] == [
+        (logging.DEBUG, f"Webhook github: no Dag schedules on any of its candidates {candidates}")
+    ]
 
 
 @mock.patch.dict(os.environ, GITLAB_CONN)
@@ -315,6 +332,14 @@ def test_rejected_delivery(client, session, subscribe, delivery, expected_status
         pytest.param(
             {"conn_type": "generic", "password": SECRET, "extra": {"source_type": "hmac_json"}},
             id="incomplete-source-options",
+        ),
+        pytest.param(
+            {
+                "conn_type": "generic",
+                "password": SECRET,
+                "extra": {"source_type": "github", "max_body_bytes": 0},
+            },
+            id="no-body-allowed",
         ),
     ],
 )

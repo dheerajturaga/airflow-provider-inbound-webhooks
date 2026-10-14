@@ -96,12 +96,15 @@ def resolve_webhook(name: str) -> ConfiguredWebhook:
             raise ValueError("the password, which holds the shared secret, is empty")
         if extra.get("team_name") and not supports_team_attribution():
             raise ValueError("team_name needs Airflow 3.3 or later to attribute events to a team")
+        # The connection form enforces this, but connections from JSON or environment variables skip it.
+        if (max_body_bytes := int(extra.get("max_body_bytes", DEFAULT_MAX_BODY_BYTES))) < 1:
+            raise ValueError("max_body_bytes must be at least 1")
         return ConfiguredWebhook(
             name=name,
             source=SOURCE_TYPES[source_type].from_extra(extra),
             secret=conn.password,
             team_name=extra.get("team_name"),
-            max_body_bytes=int(extra.get("max_body_bytes", DEFAULT_MAX_BODY_BYTES)),
+            max_body_bytes=max_body_bytes,
         )
     except ValueError as e:
         log.error("Webhook connection %s is misconfigured: %s", conn_id, e)
@@ -242,6 +245,9 @@ def receive_webhook(
             )
             if asset_event is not None:
                 asset_events[asset_model.name] = asset_event.id
+    if not asset_events:
+        # Debug only: a webhook that sends every event would otherwise log most deliveries.
+        log.debug("Webhook %s: no Dag schedules on any of its candidates %s", webhook.name, candidates)
     return {
         "status": "accepted" if asset_events else "no_subscribers",
         "asset_events": asset_events,

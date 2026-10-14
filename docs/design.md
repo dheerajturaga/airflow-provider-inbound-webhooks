@@ -88,11 +88,15 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
    other components only pay for FastAPI and building the app, about 70 ms on Airflow 3.3. Avoiding
    that too would mean giving Airflow a lazily built app rather than the FastAPI app `fastapi_apps`
    is documented to take.
-4. **Payload retention.** Each recorded asset event stores the full payload, except that `jira`
-   stores a summary by default, because every Jira delivery carries the whole issue. Should other
-   source types store a summary too?
+4. **Payload retention.** Each source type stores the body as received, unless every delivery also
+   carries a full copy of the object it is about; only Jira's do, so `jira` alone stores a summary by
+   default. Anyone who can read asset events can read the payloads. A `store_payload` option for the
+   other source types, offering a summary or nothing, could be added later without breaking anyone,
+   as long as their default stays the full body.
 5. **Audit.** The REST API writes an action log entry per user; a delivery has no user.
-6. **Name stability.** Renaming a repository or project changes its event names.
+6. **Name stability.** From 0.1.0, changing a name that an existing delivery produces is a breaking
+   change, released in a new minor version below 1.0 (README, "Event names"). Renaming a repository
+   or project still changes its names, which the plugin cannot prevent.
 7. **Source types from other packages.** `SOURCE_TYPES` is a fixed dictionary; other packages could
    contribute source types through an entry point.
 8. **Verification handshakes.** Some services verify a URL when the webhook is registered and expect

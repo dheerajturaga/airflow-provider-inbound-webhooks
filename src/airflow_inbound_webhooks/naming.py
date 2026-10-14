@@ -22,21 +22,23 @@ def normalize_segment(value: str) -> str:
     return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode().strip()
 
 
-def build_wildcard_path(path: str) -> str:
-    head, separator, _ = path.rpartition("/")
-    return f"{head}{separator}*"
+def build_wildcard_paths(path: str) -> list[str]:
+    """Return ``path`` with ``*`` in place of each trailing part, narrow to broad (``a/*``, ``*``)."""
+    segments = path.split("/")
+    return ["/".join([*segments[:end], "*"]) for end in range(len(segments) - 1, -1, -1)]
 
 
 def build_candidate_names(webhook_name: str, event: WebhookEvent) -> list[str]:
     """
     Return every asset name a Dag could subscribe to for this delivery, broad to specific.
 
-    Each kind prefix is offered for the event's own path and for the path with its last
-    segment replaced by ``*`` (``my-org/web`` -> ``my-org/*``: any repository in the org).
+    Each kind prefix is offered for the event's own path and for the path with ``*`` in place of
+    each trailing part, so ``*`` means anything below that point: ``platform/backend/api`` is also
+    offered as ``platform/backend/*``, ``platform/*`` and ``*``.
     """
     if event.path:
         path = "/".join(normalize_segment(segment) for segment in event.path.split("/"))
-        scopes: list[str | None] = list(dict.fromkeys([path, build_wildcard_path(path)]))
+        scopes: list[str | None] = list(dict.fromkeys([path, *build_wildcard_paths(path)]))
     else:
         scopes = [None]
     names: dict[str, None] = {}
