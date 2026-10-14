@@ -34,7 +34,7 @@ Airflow builds connection forms differently across the supported versions, so
 | Airflow | Form source |
 |---|---|
 | 3.2 and later | `conn-fields` and `ui-field-behaviour` in the provider metadata. The hook methods are then skipped, so their deprecation warning does not appear. |
-| 3.1.3 to 3.1.x | The hook's `get_connection_form_widgets()` and `get_ui_field_behaviour()`, called with WTForms, Flask-Babel and Flask-AppBuilder replaced by mocks |
+| 3.1.3 to 3.1.x | The hook's `get_connection_form_widgets()` and `get_ui_field_behaviour()`, called with WTForms, Flask-Babel and Flask-AppBuilder replaced by mocks. On Python 3.10, `mock.patch` resolves `wtforms.validators.any_of` through the `wtforms` mock instead of the separate `wtforms.validators` mock the hook imports, so choice fields lose their values and show as text, for every provider; the descriptions list the values |
 | 3.1.1 and 3.1.2 | The same hook methods, but these versions only mock those packages when they are installed, so without Flask-AppBuilder no provider's form has fields |
 
 The form saves every field, with `null` for those left empty, so the endpoint drops `null` and `""`
