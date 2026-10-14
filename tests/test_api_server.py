@@ -49,6 +49,12 @@ SEND_TEST_EVENT = Path(__file__).parents[1] / "examples" / "send_test_event.py"
 CONNECTION_FORMS_AVAILABLE = Version(airflow.__version__) >= Version("3.1.3") or bool(
     find_spec("flask_appbuilder")
 )
+# Airflow 3.1 builds forms with WTForms replaced by mocks when it is not installed. On Python 3.10,
+# mock.patch reaches wtforms.validators through the wtforms mock rather than the module the hook
+# imports, so the any_of mock is missed and choice fields become text fields.
+CHOICES_SHOWN = not (
+    Version(airflow.__version__) < Version("3.2") and sys.version_info < (3, 11) and not find_spec("wtforms")
+)
 
 
 def find_free_port() -> int:
@@ -211,13 +217,11 @@ def test_connection_form_is_served(api_server_url, api_token):
         assert not hook["extra_fields"]
         return
     assert list(hook["extra_fields"]) == [field.name for field in FIELDS]
-    assert hook["extra_fields"]["source_type"]["schema"]["enum"] == [
-        "hmac_json",
-        "token_header",
-        "github",
-        "gitlab",
-        "jira",
-    ]
+    source_type = hook["extra_fields"]["source_type"]["schema"]
+    if CHOICES_SHOWN:
+        assert source_type["enum"] == ["hmac_json", "token_header", "github", "gitlab", "jira"]
+    else:
+        assert "enum" not in source_type
     assert hook["standard_fields"]["password"]["title"] == "Shared secret"
     assert all(hook["standard_fields"][field]["hidden"] for field in ("host", "port", "login"))
 

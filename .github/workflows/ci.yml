@@ -32,13 +32,29 @@ jobs:
         run: uvx prek==0.3.4 run --all-files --show-diff-on-failure
 
   tests:
-    name: Tests (Airflow ${{ matrix.airflow }})
+    name: Tests (Airflow ${{ matrix.airflow }}, Python ${{ matrix.python }}, ${{ matrix.database }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # The minimum supported version, the newest patch of each supported minor, and whatever is newest.
-        airflow: ["3.1.1", "3.1.8", "3.2.2", "3.3.2", "latest"]
+        include:
+          # The minimum supported version, the newest patch of each supported minor and whatever is
+          # newest, each on the oldest and the newest Python it supports.
+          - {airflow: "3.1.1", python: "3.10", database: sqlite}
+          - {airflow: "3.1.1", python: "3.13", database: sqlite}
+          - {airflow: "3.1.8", python: "3.10", database: sqlite}
+          - {airflow: "3.1.8", python: "3.13", database: sqlite}
+          - {airflow: "3.2.2", python: "3.10", database: sqlite}
+          - {airflow: "3.2.2", python: "3.14", database: sqlite}
+          - {airflow: "3.3.2", python: "3.10", database: sqlite}
+          - {airflow: "3.3.2", python: "3.14", database: sqlite}
+          - {airflow: latest, python: "3.10", database: sqlite}
+          - {airflow: latest, python: "3.14", database: sqlite}
+          # Production databases on the oldest and newest Airflow, whose asset tables differ most.
+          - {airflow: "3.1.1", python: "3.12", database: postgres}
+          - {airflow: "3.1.1", python: "3.12", database: mysql}
+          - {airflow: latest, python: "3.12", database: postgres}
+          - {airflow: latest, python: "3.12", database: mysql}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -56,19 +72,57 @@ jobs:
           fi
           echo "Testing against Airflow $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Install Airflow and the package with Airflow's constraints
+      - name: Start the database
+        if: matrix.database != 'sqlite'
+        timeout-minutes: 3
+        env:
+          DATABASE: ${{ matrix.database }}
+        run: |
+          # Readiness is checked over TCP: both images first run a setup server that only listens on a
+          # socket, then restart.
+          if [[ "$DATABASE" == "postgres" ]]; then
+            docker run --detach --name database --publish 127.0.0.1:5432:5432 \
+              --env POSTGRES_USER=airflow --env POSTGRES_PASSWORD=airflow --env POSTGRES_DB=airflow \
+              postgres:17
+            until docker exec database pg_isready --host 127.0.0.1 --username airflow; do sleep 2; done
+            url="postgresql+psycopg2://airflow:airflow@127.0.0.1:5432/airflow"
+          else
+            docker run --detach --name database --publish 127.0.0.1:3306:3306 \
+              --env MYSQL_ROOT_PASSWORD=airflow --env MYSQL_DATABASE=airflow \
+              mysql:8.4
+            until docker exec database mysqladmin ping --host 127.0.0.1 --user root --password=airflow \
+              --silent; do sleep 2; done
+            url="mysql+mysqldb://root:airflow@127.0.0.1:3306/airflow"
+          fi
+          echo "INBOUND_WEBHOOKS_TEST_DATABASE=$url" >> "$GITHUB_ENV"
+      - name: Install Airflow and the package's wheel with Airflow's constraints
         env:
           AIRFLOW_VERSION: ${{ steps.airflow.outputs.version }}
+          PYTHON_VERSION: ${{ matrix.python }}
+          DATABASE: ${{ matrix.database }}
         run: |
-          constraints="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.11.txt"
-          uv venv -p 3.11
-          uv pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "$constraints"
-          uv pip install --editable . pytest mypy --constraint "$constraints"
+          constraints="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+          # A uv-managed Python ships the headers that building mysqlclient needs.
+          uv venv -p "$PYTHON_VERSION" --managed-python
+          airflow="apache-airflow==${AIRFLOW_VERSION}"
+          if [[ "$DATABASE" != "sqlite" ]]; then
+            # Airflow's extra brings the sync and async drivers its version uses for this database.
+            airflow="apache-airflow[${DATABASE}]==${AIRFLOW_VERSION}"
+          fi
+          if [[ "$DATABASE" == "mysql" ]]; then
+            sudo apt-get update --quiet
+            sudo apt-get install --yes --no-install-recommends libmysqlclient-dev pkg-config
+          fi
+          uv pip install "$airflow" --constraint "$constraints"
+          # The wheel rather than the source tree, so the tests cover what a release publishes.
+          uv build --wheel --out-dir dist
+          uv pip install dist/*.whl pytest mypy --constraint "$constraints"
+          .venv/bin/python -c "import airflow_inbound_webhooks; print(airflow_inbound_webhooks.__file__)"
       # Only against the newest release: older ones annotate their models less precisely (3.1's are
       # Column[...] declarations, and 3.1.1 pins an untyped SQLAlchemy), so mypy reports their typing,
       # not this package's. Changed signatures in Airflow internals show up in the newest release first.
       - name: Type-check
-        if: matrix.airflow == 'latest'
+        if: matrix.airflow == 'latest' && matrix.python == '3.14' && matrix.database == 'sqlite'
         run: .venv/bin/mypy src
       - name: Run tests
         run: .venv/bin/pytest

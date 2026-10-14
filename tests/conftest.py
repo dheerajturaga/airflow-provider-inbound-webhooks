@@ -1,6 +1,6 @@
 # Copyright 2026 Dheeraj Turaga
 # SPDX-License-Identifier: Apache-2.0
-"""Standalone test setup: a throwaway Airflow home with a SQLite metadata database."""
+"""Standalone test setup: a throwaway Airflow home with a metadata database of its own."""
 
 from __future__ import annotations
 
@@ -14,13 +14,16 @@ from pathlib import Path
 AIRFLOW_HOME = Path(tempfile.mkdtemp(prefix="airflow-inbound-webhooks-tests-"))
 # A known password for the default "admin" user, so tests can call the API server's REST API.
 (AIRFLOW_HOME / "simple_auth_manager_passwords.json").write_text('{"admin": "admin"}')
+# Tests delete Dags, assets and connections, so they never use the database Airflow is configured with:
+# a new SQLite file, or the PostgreSQL or MySQL database INBOUND_WEBHOOKS_TEST_DATABASE names.
+TEST_DATABASE = os.environ.get("INBOUND_WEBHOOKS_TEST_DATABASE") or f"sqlite:///{AIRFLOW_HOME / 'airflow.db'}"
 os.environ.update(
     {
         "AIRFLOW_HOME": str(AIRFLOW_HOME),
         "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE": str(
             AIRFLOW_HOME / "simple_auth_manager_passwords.json"
         ),
-        "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN": f"sqlite:///{AIRFLOW_HOME / 'airflow.db'}",
+        "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN": TEST_DATABASE,
         "AIRFLOW__CORE__LOAD_EXAMPLES": "False",
         "AIRFLOW__CORE__AUTH_MANAGER": (
             "airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager"
@@ -59,7 +62,11 @@ CLEARED_MODELS = (
 
 @pytest.fixture(scope="session", autouse=True)
 def airflow_db():
-    subprocess.run([sys.executable, "-m", "airflow", "db", "migrate"], check=True, capture_output=True)
+    result = subprocess.run(
+        [sys.executable, "-m", "airflow", "db", "migrate"], capture_output=True, text=True, check=False
+    )
+    if result.returncode:
+        pytest.fail(f"airflow db migrate failed:\n{(result.stdout + result.stderr)[-3000:]}")
 
 
 def clear_db() -> None:

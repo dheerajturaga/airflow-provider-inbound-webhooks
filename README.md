@@ -382,8 +382,8 @@ Deeper paths work the same way. For a GitLab project `platform/backend/api`,
 once and copy one. A delivery that matches no subscribed name is answered with
 `202 no_subscribers` and nothing is stored.
 
-Non-ASCII characters are folded (`🚀 deploy` → `deploy`), because Airflow rejects non-ASCII asset
-names on MySQL.
+Non-ASCII characters are folded (`🚀 deploy` → `deploy`) on every database, because MySQL stores
+asset names as latin1 and fails any lookup that includes a non-ASCII name.
 
 **Stability:** event names are part of this package's interface, because a Dag whose name stops
 matching does not fail; it just stops running. From 0.1.0, changing a name that an existing delivery
@@ -627,12 +627,14 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 | Airflow | Support |
 |---|---|
 | 3.3 and later | Supported, including `team_name` |
-| 3.1.1 to 3.2 | Supported; `team_name` is rejected because these versions cannot attribute asset events to a team. On 3.1.1 and 3.1.2 the connection form only shows its fields when Flask-AppBuilder is installed (for example with the FAB provider); otherwise set the fields as JSON in the connection's extra |
+| 3.1.1 to 3.2 | Supported; `team_name` is rejected because these versions cannot attribute asset events to a team. On 3.1.1 and 3.1.2 the connection form only shows its fields when Flask-AppBuilder is installed (for example with the FAB provider); otherwise set the fields as JSON in the connection's extra. On later 3.1 patches with Python 3.10, fields with a fixed set of values, such as *Source type*, show as text boxes unless Flask-AppBuilder is installed; their descriptions list the values |
 | 3.0, 3.1.0 | Not supported: their API server cannot read metadata-database connections through `airflow.sdk.Connection`, and installing next to them is refused |
 | 2.x | Not supported: there is no FastAPI API server for the plugin to mount on |
 
-CI tests Airflow 3.1.1, the newest patch of each supported minor version and the newest release, on
-Python 3.11. Each test run starts the real `airflow api-server` and sends it signed deliveries.
+CI tests the built wheel against Airflow 3.1.1, the newest patch of each supported minor version and
+the newest release, each on the oldest and the newest Python it supports (3.10 to 3.13, and 3.14 from
+Airflow 3.2) with SQLite, and against 3.1.1 and the newest release on PostgreSQL 17 and MySQL 8.4.
+Each test run starts the real `airflow api-server` and sends it signed deliveries.
 
 ## Limitations
 

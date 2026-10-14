@@ -134,6 +134,16 @@ def test_github_label_triggers_only_subscribed_dags(client, session, subscribe):
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
+def test_non_ascii_label_matches_its_folded_name(client, subscribe):
+    # MySQL stores asset names as latin1, so a name is only found there once folded to ASCII.
+    subscribe("cafe_preview", "github/my-org/web/pull_request/labeled/Cafe")
+
+    response = post_github(client, {**LABELED, "label": {"name": "\U0001f680 Café"}})
+
+    assert response.json()["asset_events"].keys() == {"github/my-org/web/pull_request/labeled/Cafe"}
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
 def test_no_subscribers_is_acknowledged_with_candidates(client, session):
     response = post_github(client)
 

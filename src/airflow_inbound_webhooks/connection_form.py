@@ -32,8 +32,8 @@ FIELDS = (
     FormField(
         "source_type",
         "Source type",
-        "How deliveries are verified and named. Leave empty to use the webhook name, so that "
-        "webhook_github is the github source type.",
+        "How deliveries are verified and named: hmac_json, token_header, github, gitlab or jira. Leave "
+        "empty to use the webhook name, so that webhook_github is the github source type.",
         choices=("hmac_json", "token_header", "github", "gitlab", "jira"),
     ),
     FormField(
@@ -49,7 +49,7 @@ FIELDS = (
     FormField(
         "signature_encoding",
         "Signature encoding",
-        "hmac_json: encoding of the digest. Defaults to hex.",
+        "hmac_json: encoding of the digest, hex (default) or base64.",
         choices=("hex", "base64"),
     ),
     FormField(

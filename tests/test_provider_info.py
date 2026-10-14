@@ -36,4 +36,6 @@ def test_configuration_options_are_registered():
         check=True,
     )
 
-    assert result.stdout.strip() == "60"
+    # The value is the last line: Airflow's CLI logs warnings to stdout first, such as Python 3.14's
+    # deprecation of argparse.FileType.
+    assert result.stdout.splitlines()[-1] == "60"
