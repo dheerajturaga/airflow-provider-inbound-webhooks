@@ -383,14 +383,16 @@ once and copy one. A delivery that matches no subscribed name is answered with
 `202 no_subscribers` and nothing is stored.
 
 Non-ASCII characters are folded (`🚀 deploy` → `deploy`) on every database, because MySQL stores
-asset names as latin1 and fails any lookup that includes a non-ASCII name.
+asset names as latin1 and fails any lookup that includes a non-ASCII name. Parts that end up empty
+are dropped, so no name contains `//`: a path `ops/🚀/api` becomes `ops/api`, and a label `🚀` adds
+no detail.
 
-**Stability:** event names are part of this package's interface, because a Dag whose name stops
-matching does not fail; it just stops running. From 0.1.0, changing a name that an existing delivery
-produces, for example how it is normalized or what its detail is, is a breaking change. Below 1.0 it
-ships only in a new minor version, and the [changelog](CHANGELOG.md) lists the old and new names
-under "Changed event names". Adding names, such as a detail for an event that had none, is not a
-breaking change, because the shorter names are still offered.
+**Stability:** event names are a public interface (see [Versioning](#versioning)), and the one most
+easily broken, because a Dag whose name stops matching does not fail; it just stops running.
+Changing a name that an existing delivery produces, for example how it is normalized or what its
+detail is, is a breaking change, and the [changelog](CHANGELOG.md) lists the old and new names under
+"Changed event names". Adding names, such as a detail for an event that had none, is not, because
+the shorter names are still offered.
 
 ## Source types
 
@@ -635,6 +637,23 @@ CI tests the built wheel against Airflow 3.1.1, the newest patch of each support
 the newest release, each on the oldest and the newest Python it supports (3.10 to 3.13, and 3.14 from
 Airflow 3.2) with SQLite, and against 3.1.1 and the newest release on PostgreSQL 17 and MySQL 8.4.
 Each test run starts the real `airflow api-server` and sends it signed deliveries.
+
+## Versioning
+
+From 0.1.0 the project follows [Semantic Versioning](https://semver.org/) for its public interfaces:
+
+- the endpoint `POST /webhooks/<name>`: its status codes, and the `status`, `asset_events` and
+  `candidates` fields of its responses;
+- the `inbound_webhook` connection type, the connection options of each source type and the
+  `[inbound_webhooks]` configuration options;
+- [event names](#event-names);
+- each asset event's `extra`: the keys `source`, `path`, `delivery_id` and `payload`, and for `jira`
+  the issue fields its summary keeps.
+
+Below 1.0, a change that breaks any of them ships only in a new minor version, and the
+[changelog](CHANGELOG.md) describes it. The Python modules are not a public interface yet: code that
+imports from `airflow_inbound_webhooks` can break in any release. Neither are the messages in a
+response's `detail` or in the API server log.
 
 ## Limitations
 

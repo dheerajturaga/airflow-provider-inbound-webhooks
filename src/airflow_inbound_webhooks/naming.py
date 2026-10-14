@@ -19,7 +19,10 @@ if TYPE_CHECKING:
 def normalize_segment(value: str) -> str:
     # MySQL stores asset names as latin1 and fails any lookup that includes a non-ASCII name; fold on
     # every database so names do not depend on it ("🚀 deploy" -> "deploy", "café" -> "cafe").
-    return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode().strip()
+    folded = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
+    # Empty parts are dropped so no name contains "//": "/foo" -> "foo", while a branch such as
+    # "feature/x" keeps its slash.
+    return "/".join(part for part in folded.split("/") if part.strip()).strip()
 
 
 def build_wildcard_paths(path: str) -> list[str]:
@@ -35,9 +38,15 @@ def build_candidate_names(webhook_name: str, event: WebhookEvent) -> list[str]:
     Each kind prefix is offered for the event's own path and for the path with ``*`` in place of
     each trailing part, so ``*`` means anything below that point: ``platform/backend/api`` is also
     offered as ``platform/backend/*``, ``platform/*`` and ``*``.
+
+    A path segment that normalizes to nothing is left out of the path, and a kind segment that does
+    ends the kind, so no name contains ``//``.
     """
-    if event.path:
-        path = "/".join(normalize_segment(segment) for segment in event.path.split("/"))
+    segments = [
+        normalized for segment in (event.path or "").split("/") if (normalized := normalize_segment(segment))
+    ]
+    if segments:
+        path = "/".join(segments)
         scopes: list[str | None] = list(dict.fromkeys([path, *build_wildcard_paths(path)]))
     else:
         scopes = [None]

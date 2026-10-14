@@ -109,6 +109,36 @@ def build_event(path, *kinds) -> WebhookEvent:
             ],
             id="segment-empty-after-folding",
         ),
+        pytest.param(
+            build_event("\U0001f680", ("deployed",)),
+            ["github/deployed"],
+            id="path-empty-after-folding",
+        ),
+        pytest.param(
+            build_event("ops/\U0001f680/api/", ("deployed",)),
+            ["github/ops/api/deployed", "github/ops/*/deployed", "github/*/deployed"],
+            id="empty-path-segments-dropped",
+        ),
+        pytest.param(
+            build_event("o/web", ("pull_request", "labeled", "/kind//bug/")),
+            [
+                "github/o/web/pull_request",
+                "github/o/*/pull_request",
+                "github/*/pull_request",
+                "github/o/web/pull_request/labeled",
+                "github/o/*/pull_request/labeled",
+                "github/*/pull_request/labeled",
+                "github/o/web/pull_request/labeled/kind/bug",
+                "github/o/*/pull_request/labeled/kind/bug",
+                "github/*/pull_request/labeled/kind/bug",
+            ],
+            id="empty-parts-of-a-segment-dropped",
+        ),
+        pytest.param(
+            build_event("o/web", ("push", "/")),
+            ["github/o/web/push", "github/o/*/push", "github/*/push"],
+            id="segment-of-slashes-ends-kind",
+        ),
     ],
 )
 def test_build_candidate_names(event, expected):

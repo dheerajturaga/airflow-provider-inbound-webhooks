@@ -98,7 +98,8 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
    change, released in a new minor version below 1.0 (README, "Event names"). Renaming a repository
    or project still changes its names, which the plugin cannot prevent.
 7. **Source types from other packages.** `SOURCE_TYPES` is a fixed dictionary; other packages could
-   contribute source types through an entry point.
+   contribute source types through an entry point. That would make `WebhookSource` and `WebhookEvent`
+   a public interface; until then the Python modules are internal (README, "Versioning").
 8. **Verification handshakes.** Some services verify a URL when the webhook is registered and expect
    a custom response, which the `WebhookSource` interface cannot produce yet.
 
