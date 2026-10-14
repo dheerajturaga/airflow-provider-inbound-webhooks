@@ -118,7 +118,9 @@ Dag authors.
 
 Event names are part of the interface. Once a source type is released, changing a name that an
 existing delivery produces is a breaking change; see "Stability" under "Event names" in the README.
-Adding a kind or a detail is not, because the shorter names are still offered.
+Adding a kind or a detail is not, because the shorter names are still offered. The connection
+options a source type reads, and the fields a summary keeps, are public interfaces too; see
+"Versioning" in the README.
 
 ## Commits and pull requests
 

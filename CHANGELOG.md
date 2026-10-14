@@ -2,9 +2,9 @@
 
 All notable changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project will use
-[Semantic Versioning](https://semver.org/) from its first release. A change to the event names that
-existing deliveries produce is a breaking change, listed under "Changed event names" with the old and
-new names.
+[Semantic Versioning](https://semver.org/) from its first release, for the public interfaces that
+"Versioning" in the README lists. A change to the event names that existing deliveries produce is a
+breaking change, listed under "Changed event names" with the old and new names.
 
 ## Unreleased
 
@@ -26,7 +26,7 @@ new names.
   `store_payload` is `full`.
 - The event naming rule `<webhook name>/<path>/<event>/<action>/<detail>`. Every prefix can be
   subscribed to, also with `*` in place of each trailing part of the path, and each response lists
-  the offered names as `candidates`.
+  the offered names as `candidates`. Names are folded to ASCII, and parts left empty are dropped.
 - Multi-team attribution through `team_name` on Airflow 3.3 and later.
 - The "Inbound Webhook" connection type, with a form in the Airflow UI for every source type option.
 - A quick start with `examples/send_test_event.py` and example Dags.
