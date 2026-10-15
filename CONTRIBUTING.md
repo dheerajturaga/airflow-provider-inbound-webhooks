@@ -138,26 +138,32 @@ Once, before the first release:
 
 1. On PyPI, under **Your account → Publishing**, add a pending trusted publisher for the project
    `airflow-provider-inbound-webhooks`: owner `dheerajturaga`, repository
-   `airflow-provider-inbound-webhooks`, workflow `release.yml` and environment `pypi`. This also
-   reserves the name until the first upload.
+   `airflow-provider-inbound-webhooks`, workflow `release.yml` and environment `pypi`. Add the same
+   on TestPyPI with the environment `testpypi`. A pending publisher does not reserve the name: until
+   the first upload, anyone can register it, and the publisher stops working.
 2. In the repository's **Settings → Environments**, create the environment `pypi`. Add yourself as a
-   required reviewer, and under deployment branches and tags allow only the tag pattern `v*`.
+   required reviewer, and under deployment branches and tags allow only the tag pattern `v*`. Create
+   `testpypi` too, allowing only the branch `main`.
 
 For each release:
 
 1. In a pull request, set `version` in `pyproject.toml`, rename the changelog's "Unreleased"
    section to `## <version> - <date>`, and add an empty "Unreleased" section above it.
-2. Once it is merged and CI has passed on `main`, tag the merge commit and push the tag:
+2. Once it is merged and CI has passed on `main`, start a dry run: on the **Actions** tab, run the
+   **Release** workflow on `main`. It publishes `main` to TestPyPI as `<version>.dev<run number>`.
+   Check the project page it links to, and that the package installs from TestPyPI.
+3. Tag the merge commit and push the tag:
 
    ```bash
    git tag -a v0.1.0 -m "Release 0.1.0"
    git push origin v0.1.0
    ```
 
-3. The workflow checks that the tag matches the version and that the changelog has its section,
-   builds the sdist and wheel, and waits for you to approve the `pypi` deployment. Approved, it
-   uploads them with attestations that this workflow built them.
-4. Create a GitHub release from the tag, with the changelog section as its notes.
+4. The workflow checks that the tagged commit is on `main`, that the tag matches the version and
+   that the changelog has its section, builds the sdist and wheel, and waits for you to approve the
+   `pypi` deployment. Approved, it uploads them with attestations that this workflow built them. A
+   version can be uploaded only once, so a mistake found later needs a new version.
+5. Create a GitHub release from the tag, with the changelog section as its notes.
 
 ## Commits and pull requests
 
