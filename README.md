@@ -9,6 +9,8 @@
 
 <p align="center">
   <a href="https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://pypi.org/project/airflow-provider-inbound-webhooks/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/airflow-provider-inbound-webhooks"></a>
+  <a href="https://pypi.org/project/airflow-provider-inbound-webhooks/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/airflow-provider-inbound-webhooks"></a>
   <img alt="Airflow 3.1.1+" src="https://img.shields.io/badge/Airflow-3.1.1%2B-017cee">
   <img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue">
 </p>
