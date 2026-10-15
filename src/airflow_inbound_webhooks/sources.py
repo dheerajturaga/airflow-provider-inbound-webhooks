@@ -68,7 +68,12 @@ def load_json_object(headers: Headers, body: bytes) -> dict[str, Any]:
             f"Expected Content-Type application/json, got {content_type or 'none'}; "
             "configure the sender to deliver JSON"
         )
-    payload = json.loads(body)
+    try:
+        payload = json.loads(body)
+    except RecursionError:
+        # json raises RecursionError rather than ValueError for nesting deeper than the interpreter
+        # allows, which would otherwise answer a signed delivery with a 500.
+        raise ValueError("JSON body is nested too deeply") from None
     if not isinstance(payload, dict):
         raise ValueError("Expected a JSON object")
     return payload

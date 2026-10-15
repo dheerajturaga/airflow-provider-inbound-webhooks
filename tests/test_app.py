@@ -7,6 +7,9 @@ import hmac
 import json
 import logging
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from http import HTTPStatus
 from unittest import mock
 
 import pytest
@@ -93,9 +96,11 @@ def client():
 def fresh_webhook_cache():
     """Forget resolved connections, which would otherwise outlive the test that created them."""
     app.resolved_webhooks.clear()
+    app.resolve_locks.clear()
     app.warn_no_webhook_names.cache_clear()
     yield
     app.resolved_webhooks.clear()
+    app.resolve_locks.clear()
     app.warn_no_webhook_names.cache_clear()
 
 
@@ -131,6 +136,24 @@ def test_github_label_triggers_only_subscribed_dags(client, session, subscribe):
         "delivery_id": "delivery-1",
         "payload": LABELED,
     }
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_url_with_trailing_slash_is_served(session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    # Not followed: a redirect would pass here, but senders such as GitHub do not follow one.
+    client = TestClient(build_app(), follow_redirects=False)
+
+    response = post_github(client, path="/github/")
+
+    assert response.status_code == 202
+    assert get_queued_dag_ids(session) == {"web_deploy_preview"}
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_api_docs_are_not_served(client, path):
+    # Airflow mounts the app without authentication, so it serves nothing but POST /<name>.
+    assert client.get(path).status_code == HTTPStatus.METHOD_NOT_ALLOWED
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
@@ -483,6 +506,29 @@ def test_connection_is_read_once_per_cache_ttl(client, connection_lookups):
 
     assert statuses == [202, 401, 202, 202]
     assert connection_lookups.call_count == 2
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="github,gitlab")})
+def test_slow_lookup_holds_up_only_its_own_webhook(client):
+    gitlab_lookup_started, finish_gitlab_lookup = threading.Event(), threading.Event()
+    get_connection = app.Connection.get
+
+    def get_slowly(conn_id: str):
+        if conn_id == "webhook_gitlab":
+            gitlab_lookup_started.set()
+            finish_gitlab_lookup.wait(timeout=30)
+        return get_connection(conn_id)
+
+    with mock.patch.object(app.Connection, "get", side_effect=get_slowly), ThreadPoolExecutor(2) as executor:
+        try:
+            executor.submit(client.post, "/gitlab", json={})
+            assert gitlab_lookup_started.wait(timeout=30)
+            # A lock shared by every webhook would keep this waiting until the gitlab lookup finished.
+            response = executor.submit(post_github, client).result(timeout=10)
+        finally:
+            finish_gitlab_lookup.set()
+
+    assert response.status_code == 202
 
 
 @pytest.mark.parametrize(

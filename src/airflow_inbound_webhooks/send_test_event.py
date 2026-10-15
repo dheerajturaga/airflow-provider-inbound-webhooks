@@ -4,14 +4,15 @@ r"""
 Send a signed test delivery to an inbound webhook, as a service would.
 
 Signs the body with HMAC-SHA256, prints the response, and exits non-zero unless it is a 2xx.
-Standard library only, so it runs anywhere.
+It uses only the standard library, so it also runs as a standalone script where the package is not
+installed.
 
-    python examples/send_test_event.py --url http://localhost:8080/webhooks/demo \
+    python -m airflow_inbound_webhooks.send_test_event --url http://localhost:8080/webhooks/demo \
         --secret change-me --data '{"event": "deployed", "service": "billing"}'
 
 GitHub-style delivery:
 
-    python examples/send_test_event.py --url http://localhost:8080/webhooks/github \
+    python -m airflow_inbound_webhooks.send_test_event --url http://localhost:8080/webhooks/github \
         --secret change-me --signature-header X-Hub-Signature-256 --signature-prefix sha256= \
         --header "X-GitHub-Event: push" \
         --data '{"ref": "refs/heads/main", "repository": {"full_name": "my-org/web"}}'

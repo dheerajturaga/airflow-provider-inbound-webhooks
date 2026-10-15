@@ -1,20 +1,21 @@
 # Copyright 2026 Dheeraj Turaga
 # SPDX-License-Identifier: Apache-2.0
 [build-system]
-requires = ["hatchling"]
+# 1.27 is the first hatchling with the SPDX license and license-files metadata of PEP 639.
+requires = ["hatchling>=1.27", "hatch-fancy-pypi-readme>=25.1"]
 build-backend = "hatchling.build"
 
 [project]
 name = "airflow-provider-inbound-webhooks"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Inbound webhooks for Apache Airflow: deliveries from GitHub, GitLab, Jira and other services become asset events"
-readme = "README.md"
+dynamic = ["readme"]
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Dheeraj Turaga" }]
 requires-python = ">=3.10"
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Framework :: Apache Airflow",
     "Framework :: Apache Airflow :: Provider",
     "Programming Language :: Python :: 3",
@@ -42,6 +43,26 @@ provider_info = "airflow_inbound_webhooks.get_provider_info:get_provider_info"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/airflow_inbound_webhooks"]
+
+# PyPI shows the README without the repository around it, so relative links and images are made
+# absolute, and the Mermaid diagram, which PyPI shows as its source, is replaced by a link to it.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(?s)```mermaid\n.*?```\n'
+replacement = 'See the [diagram of this flow](https://github.com/dheerajturaga/airflow-provider-inbound-webhooks#how-it-works) on GitHub.\n'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(src|srcset)="(?!https?://)([^"]+)"'
+replacement = '\1="https://raw.githubusercontent.com/dheerajturaga/airflow-provider-inbound-webhooks/main/\2"'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://|#|mailto:)([^)\s]+)\)'
+replacement = '](https://github.com/dheerajturaga/airflow-provider-inbound-webhooks/blob/main/\1)'
 
 # Ruff settings follow apache/airflow's pyproject.toml, minus monorepo-specific paths and bans.
 [tool.ruff]

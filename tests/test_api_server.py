@@ -44,7 +44,6 @@ LABELED = {
     "label": {"name": "deploy-preview"},
     "repository": {"full_name": "my-org/web"},
 }
-SEND_TEST_EVENT = Path(__file__).parents[1] / "examples" / "send_test_event.py"
 # Airflow 3.1.1 and 3.1.2 can only build connection forms when Flask-AppBuilder is installed.
 CONNECTION_FORMS_AVAILABLE = Version(airflow.__version__) >= Version("3.1.3") or bool(
     find_spec("flask_appbuilder")
@@ -200,7 +199,8 @@ def api_token(api_server_url) -> str:
 
 def send_test_event(url: str, data: dict) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(SEND_TEST_EVENT), "--url", url, "--secret", SECRET, "--data", json.dumps(data)],
+        [sys.executable, "-m", "airflow_inbound_webhooks.send_test_event"]
+        + ["--url", url, "--secret", SECRET, "--data", json.dumps(data)],
         capture_output=True,
         text=True,
         check=False,

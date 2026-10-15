@@ -1,0 +1,70 @@
+# Copyright 2026 Dheeraj Turaga
+# SPDX-License-Identifier: Apache-2.0
+---
+name: Release
+
+on:  # yamllint disable-line rule:truthy
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+# One run per tag, and never cancelled: a release must not stop between uploading its files.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read  # To check out the tagged commit; building needs nothing else.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          # What is published must not depend on a cache that another workflow run wrote.
+          enable-cache: false
+      - name: Check that the tag names the package version, and the changelog has its section
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(python3 -c '
+          import tomllib
+          print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          if [[ "$TAG" != "v$version" ]]; then
+            echo "::error::Tag $TAG does not match the version in pyproject.toml, $version"
+            exit 1
+          fi
+          if ! grep -qE "^## ${version//./\\.} - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section \"## $version - <date>\""
+            exit 1
+          fi
+      - name: Build the sdist and wheel
+        run: uv build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Its protection rules decide who approves a release; see "Releasing" in CONTRIBUTING.md.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/airflow-provider-inbound-webhooks/
+    permissions:
+      id-token: write  # Trusted publishing: PyPI takes this job's OIDC token, so none is stored.
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      # Checks the metadata, uploads, and attests that this workflow built the files.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2

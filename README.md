@@ -44,11 +44,10 @@ service's signature and records the delivery as an asset event.
 Try it with the bundled test sender, so no third-party account is needed. Run these commands on the
 machine running the Airflow API server (Airflow 3.1.1 or later).
 
-1. **Install the plugin.** Until the first PyPI release, install from a clone:
+1. **Install the plugin:**
 
    ```bash
-   git clone https://github.com/dheerajturaga/airflow-provider-inbound-webhooks
-   pip install ./airflow-provider-inbound-webhooks "apache-airflow==$(airflow version)"
+   pip install airflow-provider-inbound-webhooks "apache-airflow==$(airflow version)"
    ```
 
    Pinning `apache-airflow` to the version you run keeps pip from changing it.
@@ -91,15 +90,39 @@ machine running the Airflow API server (Airflow 3.1.1 or later).
 4. **Add a Dag** that runs on the event, and unpause it, since new Dags start paused:
 
    ```bash
-   cp airflow-provider-inbound-webhooks/examples/dags/quickstart.py "$(airflow config get-value core dags_folder)"
+   dags_folder="$(airflow config get-value core dags_folder)"
+   mkdir -p "$dags_folder"
+   cat > "$dags_folder/quickstart.py" <<'EOF'
+   """Quick start Dag: runs when the ``demo`` webhook receives a ``deployed`` event for the ``billing`` service."""
+
+   from __future__ import annotations
+
+   from airflow.sdk import Asset, dag, task
+
+   billing_deployed = Asset("demo/billing/deployed")
+
+
+   @dag(schedule=billing_deployed)
+   def smoke_test_billing():
+       @task
+       def smoke_test(*, triggering_asset_events=None):
+           # One run can carry several deliveries (always possible before Airflow 3.4).
+           for event in triggering_asset_events[billing_deployed]:
+               print(f"Smoke-testing billing after deployment: {event.extra['payload']}")
+
+       smoke_test()
+
+
+   smoke_test_billing()
+   EOF
    airflow dags reserialize  # parse it now rather than at the next scan of the Dags folder
    airflow dags unpause smoke_test_billing
    ```
 
-5. **Send a signed test delivery:**
+5. **Send a signed test delivery** with the test sender the package includes:
 
    ```bash
-   python airflow-provider-inbound-webhooks/examples/send_test_event.py \
+   python -m airflow_inbound_webhooks.send_test_event \
      --url http://localhost:8080/webhooks/demo --secret 'change-me' \
      --data '{"event": "deployed", "service": "billing"}'
    ```
@@ -424,7 +447,7 @@ changed.
 | `signature_header` | yes | Header carrying the signature |
 | `signature_prefix` | no | Text before the digest, e.g. `sha256=` or `v1=` |
 | `signature_encoding` | no | `hex` (default) or `base64` |
-| `event_field` or `event_header` | one of them | Dotted path into the JSON body (`data.type`), or a header, naming the event |
+| `event_field` or `event_header` | one of them | Dotted path into the JSON body (`data.type`), or a header, naming the event. Prefer `event_field` when the service names the event in both: the signature covers the body but not the headers |
 | `path_field` | no | Dotted path to a value that becomes the path, such as a service or project name |
 
 ### `token_header`: services that send a secret header
@@ -618,8 +641,11 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
   delivery's payload, and the Airflow UI and REST API show it to every user allowed to read assets,
   not only to the Dags that subscribe. GitHub push payloads, for example, include each commit
   author's name and email address. `jira` stores only a summary of the issue by default.
-- **No replay protection yet.** A captured delivery can be sent again. Signatures over a timestamp
-  would allow rejecting old deliveries; see [docs/design.md](docs/design.md).
+- **No replay protection yet.** A captured delivery can be sent again, also with headers its
+  signature does not cover changed. Where the event name comes from such a header, as GitHub's
+  `X-GitHub-Event` or an `event_header` does, a replayed body can be given another event's name.
+  Signatures over a timestamp would allow rejecting old deliveries; see
+  [docs/design.md](docs/design.md).
 - Bodies larger than `max_body_bytes` are refused before verification.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).

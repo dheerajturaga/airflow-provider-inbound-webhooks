@@ -58,7 +58,7 @@ The tests are organised as:
 | `tests/test_app.py` | The endpoint, in process: routing, responses, connection handling |
 | `tests/test_api_server.py` | The real `airflow api-server` with the installed plugin, over HTTP, including the README quick start |
 | `tests/test_plugin.py` | That importing the plugin, which every Airflow process does, leaves the endpoint's Airflow internals unimported |
-| `tests/test_examples.py` | That every example Dag file builds against the installed Airflow |
+| `tests/test_examples.py` | That every example Dag file builds against the installed Airflow, and that the README quick start writes the quick start Dag unchanged |
 | `tests/test_provider_info.py` | That the provider metadata conforms to the installed Airflow's schema |
 
 Every change in behaviour needs a test that fails without it.
@@ -128,6 +128,36 @@ existing delivery produces is a breaking change; see "Stability" under "Event na
 Adding a kind or a detail is not, because the shorter names are still offered. The connection
 options a source type reads, and the fields a summary keeps, are public interfaces too; see
 "Versioning" in the README.
+
+## Releasing
+
+`.github/workflows/release.yml` publishes a release to PyPI when its version tag is pushed. It uses
+[trusted publishing](https://docs.pypi.org/trusted-publishers/), so no PyPI token is stored anywhere.
+
+Once, before the first release:
+
+1. On PyPI, under **Your account → Publishing**, add a pending trusted publisher for the project
+   `airflow-provider-inbound-webhooks`: owner `dheerajturaga`, repository
+   `airflow-provider-inbound-webhooks`, workflow `release.yml` and environment `pypi`. This also
+   reserves the name until the first upload.
+2. In the repository's **Settings → Environments**, create the environment `pypi`. Add yourself as a
+   required reviewer, and under deployment branches and tags allow only the tag pattern `v*`.
+
+For each release:
+
+1. In a pull request, set `version` in `pyproject.toml`, rename the changelog's "Unreleased"
+   section to `## <version> - <date>`, and add an empty "Unreleased" section above it.
+2. Once it is merged and CI has passed on `main`, tag the merge commit and push the tag:
+
+   ```bash
+   git tag -a v0.1.0 -m "Release 0.1.0"
+   git push origin v0.1.0
+   ```
+
+3. The workflow checks that the tag matches the version and that the changelog has its section,
+   builds the sdist and wheel, and waits for you to approve the `pypi` deployment. Approved, it
+   uploads them with attestations that this workflow built them.
+4. Create a GitHub release from the tag, with the changelog section as its notes.
 
 ## Commits and pull requests
 

@@ -11,7 +11,8 @@ are made public.
 
 ## Supported versions
 
-Until the first release, fixes are made on `main` only.
+Security fixes are made in a new release of the newest version only, so upgrade to it to receive
+them.
 
 ## What counts as a vulnerability
 
@@ -29,7 +30,9 @@ Reports we want to hear about include:
 
 These are known and documented limitations, not vulnerabilities:
 
-- replaying a captured, validly signed delivery (there is no replay protection yet);
+- replaying a captured, validly signed delivery, including with headers its signature does not
+  cover changed, such as GitHub's `X-GitHub-Event` or an `event_header`, which name the event
+  (there is no replay protection yet);
 - the `token_header` and `gitlab` source types sending the secret itself, which relies on TLS;
 - the endpoint being reachable without an Airflow login;
 - a holder of a webhook's secret choosing, through the payload, which event names under that

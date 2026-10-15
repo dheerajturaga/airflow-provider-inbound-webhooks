@@ -120,6 +120,12 @@ class TestGitHubSource:
                 id="form",
             ),
             pytest.param({**JSON, "X-GitHub-Event": "push"}, b"[]", id="not-an-object"),
+            # Deeper than the recursion limit, but well within the default max_body_bytes.
+            pytest.param(
+                {**JSON, "X-GitHub-Event": "push"},
+                b"[" * 200_000 + b"]" * 200_000,
+                id="nested-too-deeply",
+            ),
         ],
     )
     def test_parse_rejects(self, headers, body):
