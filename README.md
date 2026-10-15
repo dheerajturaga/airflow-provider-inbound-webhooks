@@ -30,6 +30,25 @@ its deliveries with HMAC-SHA256 or sends a secret header works today, described 
 def smoke_test_billing(): ...
 ```
 
+## See it work
+
+Someone adds the `deploy-preview` label to a pull request in GitHub:
+
+<img alt="A GitHub pull request, Greet in French #1, with the deploy-preview label added" src="docs/images/screenshots/github-pr-label.png" width="800">
+
+GitHub's delivery becomes an event on the asset
+`github/dheerajturaga/inbound-webhooks-demo/pull_request/labeled/deploy-preview`, which the
+`deploy_preview` Dag schedules on:
+
+<img alt="Airflow's asset graph: the asset github/dheerajturaga/inbound-webhooks-demo/pull_request/labeled/deploy-preview leads to the deploy_preview Dag" src="docs/images/screenshots/airflow-asset-graph.png" width="640">
+
+So `deploy_preview` runs, with the pull request from the delivery's payload:
+
+<img alt="The log of deploy_preview's task: Deploying a preview of PR #1 at d48621a: Greet in French" src="docs/images/screenshots/airflow-task-log.png" width="720">
+
+The repository and its Dags are in
+[dheerajturaga/inbound-webhooks-demo](https://github.com/dheerajturaga/inbound-webhooks-demo).
+
 ## Why
 
 Airflow can be triggered from outside through its REST API, but webhook senders can't use it: they
@@ -180,6 +199,16 @@ Before you start:
    airflow connections add webhook_github --conn-type inbound_webhook --conn-password "$SECRET"
    ```
 
+   <details>
+   <summary>Or in the Airflow UI</summary>
+
+   Under Admin → Connections, add a connection of type **Inbound Webhook** with the Connection Id
+   `webhook_github`, and a new secret, such as one from `openssl rand -hex 32`, as its shared secret:
+
+   <img alt="Airflow's Add Connection form: Connection ID webhook_github, Connection Type Inbound Webhook and a masked shared secret" src="docs/images/screenshots/airflow-add-connection.png" width="560">
+
+   </details>
+
 **In GitHub**
 
 3. In the repository, open **Settings → Webhooks → Add webhook**. To cover every repository of an
@@ -195,6 +224,8 @@ Before you start:
    | Which events would you like to trigger this webhook? | **Let me select individual events**, then the ones your Dags need, such as *Pull requests* or *Pushes* |
    | Active | Checked |
 
+   <img alt="GitHub's webhook settings: Payload URL https://&lt;your-airflow&gt;/webhooks/github, Content type application/json and a configured secret" src="docs/images/screenshots/github-webhook-form.png" width="720">
+
 5. Check it. GitHub sends a `ping` right away: on the webhook's **Recent Deliveries** tab it should
    have a green check, and its response should be `202` with `"status":"no_subscribers"`.
 
@@ -203,7 +234,9 @@ Before you start:
 6. Add a Dag that schedules on an event, such as
    `Asset("github/my-org/web/pull_request/labeled/deploy-preview")`, and unpause it. To find a name,
    trigger the event once and copy one of the `candidates` from its response under **Recent
-   Deliveries**, or see [Event names](#event-names).
+   Deliveries**, or see [Event names](#event-names). The Dag's page shows the name it schedules on:
+
+   <img alt="The deploy_preview Dag in Airflow, scheduled on github/dheerajturaga/inbound-webhooks-demo/pull_request/labeled/deploy-preview" src="docs/images/screenshots/airflow-dag-schedule.png" width="720">
 
 ### Connect GitLab
 
