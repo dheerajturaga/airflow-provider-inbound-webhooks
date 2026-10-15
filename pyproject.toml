@@ -44,6 +44,11 @@ provider_info = "airflow_inbound_webhooks.get_provider_info:get_provider_info"
 [tool.hatch.build.targets.wheel]
 packages = ["src/airflow_inbound_webhooks"]
 
+# The README's screenshots are loaded from the repository, on GitHub and on PyPI alike (see below),
+# so the sdist does not need them.
+[tool.hatch.build.targets.sdist]
+exclude = ["docs/images/screenshots"]
+
 # PyPI shows the README without the repository around it, so relative links and images are made
 # absolute, and the Mermaid diagram, which PyPI shows as its source, is replaced by a link to it.
 [tool.hatch.metadata.hooks.fancy-pypi-readme]
