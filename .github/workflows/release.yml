@@ -6,6 +6,8 @@ name: Release
 on:  # yamllint disable-line rule:truthy
   push:
     tags: ["v*"]
+  # A dry run, started by hand: publishes main to TestPyPI as <version>.dev<run number>.
+  workflow_dispatch:
 
 permissions: {}
 
@@ -24,11 +26,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0  # The whole history, to check that the commit is on main.
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           # What is published must not depend on a cache that another workflow run wrote.
           enable-cache: false
+      - name: Check that the commit is on main
+        run: |
+          # Commits reach main only through pull requests that passed CI, so this publishes nothing
+          # that skipped it, such as a tag pushed on a commit that was never merged.
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$(git rev-parse --short HEAD) is not on main; merge it before releasing it"
+            exit 1
+          fi
       - name: Check that the tag names the package version, and the changelog has its section
+        if: github.event_name == 'push'
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -43,6 +55,14 @@ jobs:
             echo "::error::CHANGELOG.md has no section \"## $version - <date>\""
             exit 1
           fi
+      - name: Give the dry run a version of its own
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          # TestPyPI, like PyPI, never accepts a version twice, so each dry run uploads its own.
+          sed -i -E "s/^version = \"([^\"]+)\"$/version = \"\1.dev${RUN_NUMBER}\"/" pyproject.toml
+          grep -E "^version = \".+\.dev${RUN_NUMBER}\"$" pyproject.toml
       - name: Build the sdist and wheel
         run: uv build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
@@ -51,8 +71,31 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  publish-testpypi:
+    name: Publish to TestPyPI
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    # Allows only main; see "Releasing" in CONTRIBUTING.md.
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/airflow-provider-inbound-webhooks/
+    permissions:
+      id-token: write  # Trusted publishing, as for PyPI.
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # Each dry run has its own version, so only a re-run of a partly finished upload meets one.
+          skip-existing: true
+
   publish:
     name: Publish to PyPI
+    if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     # Its protection rules decide who approves a release; see "Releasing" in CONTRIBUTING.md.
