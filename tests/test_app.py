@@ -1080,13 +1080,13 @@ def test_answered_deliveries_are_counted_and_timed(client, subscribe, stats):
 
 
 @mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="github")})
-def test_rejections_are_counted_by_status_with_unlisted_names_together(client, stats):
+def test_refused_deliveries_are_counted_by_status_with_unlisted_names_together(client, stats):
     post_github(client, secret="wrong")
     client.post("/random-name", json={})
-    client.get("/github")
+    # Not a delivery: reading deliveries without a login is refused, but not counted.
+    assert client.get("/_deliveries/github").status_code == 401
 
     assert stats.incr.call_args_list == [
         mock.call("inbound_webhooks.rejections.401", tags={"webhook": "github"}),
         mock.call("inbound_webhooks.rejections.404", tags={"webhook": "other"}),
-        mock.call("inbound_webhooks.rejections.405", tags={"webhook": "github"}),
     ]

@@ -270,3 +270,31 @@ def test_readme_quick_start(api_server_url, session, subscribe, webhook_connecti
     assert result.returncode == 0, result.stdout + result.stderr
     assert '"status":"accepted"' in result.stdout
     assert list(session.scalars(select(AssetDagRunQueue.target_dag_id))) == ["smoke_test_billing"]
+
+
+def test_health_route_needs_no_login(api_server_url):
+    assert request_json(f"{api_server_url}/webhooks/_health") == (200, {"status": "healthy"})
+
+
+def test_deliveries_api_takes_an_api_token(api_server_url, api_token, subscribe, webhook_connection):
+    webhook_connection("github")
+    subscribe("web_deploy_preview", ASSET_NAME)
+    assert post_github(api_server_url)[0] == 202
+
+    status, body = request_json(f"{api_server_url}/webhooks/_deliveries/github", token=api_token)
+
+    assert status == 200
+    assert [delivery["outcome"] for delivery in body["deliveries"]] == ["events_recorded"]
+    assert request_json(f"{api_server_url}/webhooks/_deliveries/github")[0] == 401
+
+
+def test_deliveries_page_takes_the_ui_session_cookie(api_server_url, api_token, webhook_connection):
+    # The UI frames the page, so the browser sends the session cookie, not a bearer token.
+    webhook_connection("github")
+    request = urllib.request.Request(
+        f"{api_server_url}/webhooks/_ui/deliveries?webhook=github", headers={"Cookie": f"_token={api_token}"}
+    )
+
+    with urllib.request.urlopen(request, timeout=30) as response:
+        assert response.status == 200
+        assert "Deliveries to github" in response.read().decode()

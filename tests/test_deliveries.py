@@ -1,0 +1,181 @@
+# Copyright 2026 Dheeraj Turaga
+# SPDX-License-Identifier: Apache-2.0
+"""
+The deliveries API and page, in process, with the auth manager replaced.
+
+tests/test_api_server.py checks their login against the real API server.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import uuid
+from datetime import datetime, timedelta, timezone
+from unittest import mock
+
+import pytest
+from airflow.api_fastapi.auth.managers.models.resource_details import ConnectionDetails
+from fastapi.testclient import TestClient
+
+from airflow_inbound_webhooks import deliveries
+from airflow_inbound_webhooks.app import build_app
+from airflow_inbound_webhooks.models import delivery_table
+
+pytestmark = pytest.mark.usefixtures("clean_db")
+
+READER = object()
+NOW = datetime(2026, 10, 17, 12, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def auth_manager():
+    manager = mock.Mock()
+    manager.is_authorized_connection.return_value = True
+    with mock.patch("airflow.api_fastapi.app.get_auth_manager", return_value=manager):
+        yield manager
+
+
+@pytest.fixture
+def client(auth_manager):
+    """A client logged in as READER, whose access auth_manager decides."""
+    webhooks = build_app()
+    webhooks.dependency_overrides[deliveries.get_reader] = lambda: READER
+    return TestClient(webhooks)
+
+
+@pytest.fixture
+def add_delivery(session):
+    def add(**values) -> str:
+        row = {
+            "id": str(uuid.uuid4()),
+            "webhook": "github",
+            # Unique per webhook, like a sender's.
+            "delivery_id": str(uuid.uuid4()),
+            "body_digest": "0" * 64,
+            "received_at": NOW,
+            "source_type": "github",
+            "path": "my-org/web",
+            "candidates": ["github/my-org/web/push"],
+            "asset_events": {"github/my-org/web/push": 1},
+            "correlation_key": None,
+            "outcome": "events_recorded",
+            "team_name": None,
+            "payload": {"ref": "refs/heads/main"},
+            **values,
+        }
+        session.execute(delivery_table.insert().values(**row))
+        session.commit()
+        return row["id"]
+
+    return add
+
+
+def test_health_needs_no_login():
+    response = TestClient(build_app()).get("/_health")
+
+    assert (response.status_code, response.json()) == (200, {"status": "healthy"})
+
+
+@pytest.mark.parametrize("path", ["/_deliveries/github", "/_ui/deliveries"])
+def test_reading_deliveries_needs_a_login(path):
+    assert TestClient(build_app()).get(path).status_code == 401
+
+
+def test_reading_needs_read_access_to_the_webhooks_connection(client, auth_manager):
+    auth_manager.is_authorized_connection.return_value = False
+
+    response = client.get("/_deliveries/github")
+
+    assert response.status_code == 403
+    auth_manager.is_authorized_connection.assert_called_once_with(
+        method="GET", details=ConnectionDetails(conn_id="webhook_github", team_name=None), user=READER
+    )
+
+
+@mock.patch.dict(
+    os.environ,
+    {"AIRFLOW_CONN_WEBHOOK_GITHUB": json.dumps({"conn_type": "generic", "extra": {"team_name": "team_a"}})},
+)
+def test_access_is_checked_for_the_team_of_the_webhooks_connection(client, auth_manager):
+    client.get("/_deliveries/github")
+
+    assert auth_manager.is_authorized_connection.call_args.kwargs["details"].team_name == "team_a"
+
+
+def test_names_no_webhook_can_have_are_not_looked_up(client, auth_manager):
+    assert client.get("/_deliveries/GitHub").status_code == 404
+    auth_manager.is_authorized_connection.assert_not_called()
+
+
+def test_deliveries_are_listed_newest_first_without_payloads(client, add_delivery):
+    older = add_delivery(received_at=NOW - timedelta(minutes=1))
+    newer = add_delivery(received_at=NOW)
+    add_delivery(webhook="gitlab", source_type="gitlab")
+
+    listed = client.get("/_deliveries/github").json()["deliveries"]
+
+    assert [delivery["id"] for delivery in listed] == [newer, older]
+    assert "payload" not in listed[0]
+    assert listed[0]["received_at"] == "2026-10-17T12:00:00+00:00"
+
+
+@pytest.mark.parametrize(
+    "before", ["2026-10-17T12:00:00+00:00", "2026-10-17T12:00:00"], ids=["utc", "no-zone"]
+)
+def test_before_pages_back(client, add_delivery, before):
+    older = add_delivery(received_at=NOW - timedelta(minutes=1))
+    add_delivery(received_at=NOW)
+
+    listed = client.get("/_deliveries/github", params={"before": before}).json()["deliveries"]
+
+    assert [delivery["id"] for delivery in listed] == [older]
+
+
+def test_one_delivery_comes_with_its_payload(client, add_delivery):
+    delivery = add_delivery()
+
+    assert client.get(f"/_deliveries/github/{delivery}").json()["payload"] == {"ref": "refs/heads/main"}
+    # Another webhook's delivery is not found under this one.
+    assert client.get(f"/_deliveries/gitlab/{delivery}").status_code == 404
+
+
+def test_page_lists_the_webhooks_the_reader_may_read(client, auth_manager, add_delivery):
+    add_delivery()
+    add_delivery(webhook="gitlab", source_type="gitlab")
+    auth_manager.is_authorized_connection.side_effect = lambda details, **_: (
+        details.conn_id == "webhook_github"
+    )
+
+    page = client.get("/_ui/deliveries").text
+
+    assert "?webhook=github" in page
+    assert "gitlab" not in page
+
+
+def test_pages_escape_what_senders_wrote(client, add_delivery):
+    delivery = add_delivery(
+        path="<script>alert(1)</script>", payload={"title": "<img src=x onerror=alert(1)>"}
+    )
+
+    for response in (
+        client.get("/_ui/deliveries", params={"webhook": "github"}),
+        client.get(f"/_ui/deliveries/github/{delivery}"),
+    ):
+        assert "<script>" not in response.text
+        assert "<img" not in response.text
+        assert "default-src 'none'" in response.headers["Content-Security-Policy"]
+    assert "&lt;img src=x onerror=alert(1)&gt;" in response.text
+
+
+def test_page_links_to_older_deliveries(client, add_delivery):
+    oldest = add_delivery(received_at=NOW - timedelta(hours=1))
+    for minute in range(deliveries.DEFAULT_LIMIT):
+        add_delivery(received_at=NOW + timedelta(minutes=minute))
+
+    page = client.get("/_ui/deliveries", params={"webhook": "github"}).text
+    # The time's "+" is encoded, or the link would turn it into a space.
+    link = page.split("<a href='?")[-1].split("'")[0].replace("&amp;", "&")
+
+    assert "%2B00%3A00" in link
+    assert oldest in client.get(f"/_ui/deliveries?{link}").text

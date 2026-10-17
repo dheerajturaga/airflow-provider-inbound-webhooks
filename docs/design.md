@@ -76,6 +76,20 @@ Later versions build it from the metadata either way, and stamp the newest revis
 `--use-migration-files` is given. `tests/test_db.py` checks that both give the same schema, so a
 change to the table needs a model change and a migration that agree.
 
+## Reading deliveries
+
+`deliveries.py` serves the delivery records under `/webhooks/_deliveries` as JSON and under
+`/webhooks/_ui` as a page, which the plugin adds to the UI's Browse menu as an external view. The UI
+frames the page from that view's `href`, sandboxed without scripts, so the page is plain HTML with
+links and runs no script. Its `href` carries the path of `[api] base_url`, as Airflow derives its own
+root path.
+
+Plugin apps are mounted without Airflow's authorization, so these routes check the login themselves:
+Airflow's `get_user` takes a bearer token or the UI's session cookie, and the auth manager decides
+whether the user may read the webhook's connection, which holds its secret. Everything a sender
+wrote is escaped, and a Content-Security-Policy lets the page load nothing and be framed only by
+Airflow.
+
 ## Airflow internals the plugin uses
 
 | Dependency | Why | Risk |
@@ -88,6 +102,7 @@ change to the table needs a model change and a migration that agree.
 | `airflow.models.base` (`_get_schema`, `naming_convention`) and `airflow.utils.sqlalchemy.UtcDateTime` | Give the table Airflow's schema setting, constraint names and timestamp type | Internal; the same in every supported version |
 | `airflow.models.log.Log` | Writes the audit log entry for a delivery that records events | Internal; the same constructor in every supported version, and a `team_name` column only from 3.4, which the entry sets where it exists |
 | `Stats` from `airflow.sdk.observability.stats`, or `airflow.stats` on 3.1 | Sends the delivery metrics | It moved to the Task SDK in 3.2; `airflow.stats` remains as a deprecated alias |
+| `airflow.api_fastapi.core_api.security.get_user`, `airflow.api_fastapi.app.get_auth_manager` and `ConnectionDetails` | Check the login and permissions of the deliveries page and API | Internal. `get_user`'s second parameter has a different name in 3.1 and 3.2 than in 3.3, so it is called positionally. The real API server tests check a bearer token and the UI's session cookie on every supported version |
 | `airflow.configuration.conf` | Reads the `[inbound_webhooks]` options | How every Airflow component reads its configuration, with the same `get` and `getint` in every supported version. `airflow.sdk.conf` is the Task SDK's parser and only exists from 3.2. |
 | Plugin apps are mounted without authentication | The endpoint must accept services that cannot log in | If Airflow ever required login for plugin apps, every delivery would be rejected |
 
