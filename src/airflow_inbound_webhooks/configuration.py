@@ -52,10 +52,10 @@ def build_config_section() -> dict[str, Any]:
                 },
                 RATE_LIMIT_PER_MINUTE: {
                     "description": (
-                        "Deliveries each API server worker accepts per webhook and minute. More are "
-                        "answered with 429 and Retry-After before their body is read or verified. Each "
-                        "worker counts on its own, so N workers accept up to N times as many. 0 turns the "
-                        "limit off."
+                        "Verified deliveries each API server worker records per webhook and minute. More "
+                        "are answered with 429 and Retry-After before anything is recorded; requests that "
+                        "fail verification do not count. Each worker counts on its own, so N workers "
+                        "record up to N times as many. 0 turns the limit off."
                     ),
                     "version_added": "0.2.0",
                     "type": "integer",

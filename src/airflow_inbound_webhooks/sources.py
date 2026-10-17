@@ -61,6 +61,11 @@ class WebhookSource(ABC):
         """Describe a verified request; raise ``ValueError`` if the body is malformed."""
 
 
+def refuse_constant(name: str) -> Any:
+    # Python's json accepts NaN and Infinity, which JSON does not, and MySQL refuses to store them.
+    raise ValueError(f"JSON body contains {name}, which JSON does not allow")
+
+
 def load_json_object(headers: Headers, body: bytes) -> dict[str, Any]:
     content_type = headers.get("content-type", "").split(";")[0].strip()
     if content_type != "application/json":
@@ -69,7 +74,7 @@ def load_json_object(headers: Headers, body: bytes) -> dict[str, Any]:
             "configure the sender to deliver JSON"
         )
     try:
-        payload = json.loads(body)
+        payload = json.loads(body, parse_constant=refuse_constant)
     except RecursionError:
         # json raises RecursionError rather than ValueError for nesting deeper than the interpreter
         # allows, which would otherwise answer a signed delivery with a 500.

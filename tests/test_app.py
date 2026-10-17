@@ -633,13 +633,12 @@ def test_deliveries_over_the_rate_limit_are_refused_until_it_refills(client):
 
 
 @mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(rate_limit_per_minute="1")})
-def test_rate_limit_applies_before_the_body_is_read_or_verified(client):
-    assert post_github(client).status_code == 202
+def test_requests_that_fail_verification_do_not_use_up_the_rate_limit(client):
+    # Otherwise anyone could have the sender's own deliveries refused.
+    statuses = [post_github(client, secret="wrong").status_code for _ in range(3)]
+    statuses += [post_github(client, delivery_id=f"delivery-{n}").status_code for n in range(2)]
 
-    # Too large and wrongly signed: a 413 or 401 would mean the body had been read or verified.
-    response = post_github(client, secret="wrong", body=b"x" * 4097)
-
-    assert response.status_code == 429
+    assert statuses == [401, 401, 401, 202, 429]
 
 
 @mock.patch.dict(
@@ -669,16 +668,23 @@ def test_unlisted_names_never_reach_the_rate_limit(client):
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
 @pytest.mark.parametrize(
-    "error",
+    ("error", "table_exists"),
     [
-        pytest.param(OperationalError("SELECT", {}, Exception("could not connect")), id="database-down"),
         pytest.param(
-            ProgrammingError("SELECT", {}, Exception("relation does not exist")), id="table-not-created"
+            OperationalError("SELECT", {}, Exception("could not connect")), True, id="database-down"
+        ),
+        pytest.param(
+            ProgrammingError("SELECT", {}, Exception("relation does not exist")),
+            False,
+            id="table-not-created",
         ),
     ],
 )
-def test_unusable_database_is_answered_as_temporarily_unavailable(client, caplog, error):
-    with mock.patch.object(app, "find_delivery", side_effect=error):
+def test_unusable_database_is_answered_as_temporarily_unavailable(client, caplog, error, table_exists):
+    with (
+        mock.patch.object(app, "find_delivery", side_effect=error),
+        mock.patch.object(app, "has_delivery_table", return_value=table_exists),
+    ):
         responses = [post_github(client) for _ in range(2)]
 
     assert [(r.status_code, r.headers.get("Retry-After"), r.json()) for r in responses] == [
@@ -689,6 +695,17 @@ def test_unusable_database_is_answered_as_temporarily_unavailable(client, caplog
         record for record in caplog.records if record.name == app.__name__ and record.levelno == logging.ERROR
     ]
     assert len(errors) == 1
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_other_programming_errors_are_not_taken_for_an_unavailable_database():
+    # With the table there, the error is a bug, which retrying would not fix.
+    error = ProgrammingError("SELECT", {}, Exception("syntax error"))
+
+    with mock.patch.object(app, "find_delivery", side_effect=error):
+        response = post_github(TestClient(build_app(), raise_server_exceptions=False))
+
+    assert response.status_code == 500
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)

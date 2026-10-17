@@ -12,9 +12,11 @@ documentation is in the [README](../README.md).
    result, a missing or invalid connection included, is reused for `connection_cache_ttl` seconds.
    Its password is the shared secret; its extra selects the source type and its options. A missing
    connection is a `404`, an invalid one a `503`.
-3. A webhook over `rate_limit_per_minute` is a `429`, counted per process before its body is read,
-   so a flood costs no signature checks and no writes. The body is read up to `max_body_bytes`.
-4. The source type verifies the signature or token, then parses the delivery into a path and kinds.
+3. The body is read up to `max_body_bytes`.
+4. The source type verifies the signature or token. A verified delivery over `rate_limit_per_minute`
+   is a `429`, counted per process; requests that fail verification do not count, so unsigned
+   traffic cannot have the sender's own deliveries refused. The source type then parses the delivery
+   into a path and kinds.
 5. `naming.build_candidate_names` turns those into every subscribable name.
 6. If the delivery table already holds the delivery's ID and body digest for this webhook, and that
    delivery recorded events, it is a retry: it is answered from that row, and nothing is written. A

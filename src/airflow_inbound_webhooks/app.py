@@ -49,9 +49,9 @@ MAX_PATH_LENGTH = 1500
 MAX_TEAM_NAME_LENGTH = 50
 # The response's outcome for a retry, which writes no row; other outcomes are stored on the row.
 DUPLICATE = "duplicate"
-# The database is down, or airflow db migrate has not created the delivery table: SQLite reports a
-# missing table as an OperationalError, PostgreSQL and MySQL as a ProgrammingError.
-UNAVAILABLE_DATABASE_ERRORS = (OperationalError, InterfaceError, ProgrammingError)
+# The database is down or locked. SQLite also reports a missing table this way; PostgreSQL and MySQL
+# report one as a ProgrammingError, which is only answered as unavailable when the table is missing.
+UNAVAILABLE_DATABASE_ERRORS = (OperationalError, InterfaceError)
 UNAVAILABLE_RETRY_AFTER_SECONDS = 30
 # register_asset_change accepts and drops unknown keyword arguments, so an argument a later Airflow
 # renamed would be lost silently instead of failing. The team arguments only exist from Airflow 3.3.
@@ -224,16 +224,16 @@ rate_limit_buckets: dict[str, TokenBucket] = {}
 rate_limit_lock = threading.Lock()
 
 
-def limit_rate(webhook: WebhookDep) -> ConfiguredWebhook:
+def limit_rate(webhook: ConfiguredWebhook) -> None:
     """
-    Refuse a delivery over ``rate_limit_per_minute`` before its body is read or verified.
+    Refuse a verified delivery over ``rate_limit_per_minute``, before it writes anything.
 
-    So a flood of deliveries costs no signature checks, and none of the database writes that would
-    otherwise queue up for the scheduler.
+    Only verified deliveries count: a bucket that unsigned requests could empty would let anyone refuse
+    the sender's own deliveries, and GitLab disables a webhook whose deliveries keep failing.
     """
     limit = conf.getint(configuration.SECTION, configuration.RATE_LIMIT_PER_MINUTE, fallback=0)
     if limit <= 0:
-        return webhook
+        return
     now = time.monotonic()
     with rate_limit_lock:
         bucket = rate_limit_buckets.setdefault(webhook.name, TokenBucket(tokens=limit, updated_at=now))
@@ -241,16 +241,13 @@ def limit_rate(webhook: WebhookDep) -> ConfiguredWebhook:
         bucket.updated_at = now
         if bucket.tokens >= 1:
             bucket.tokens -= 1
-            return webhook
+            return
         retry_after = math.ceil((1 - bucket.tokens) * 60 / limit)
     # Debug only: logging every refused delivery would let a flood fill the log.
     log.debug("Webhook %s is over its rate limit of %d deliveries a minute", webhook.name, limit)
     raise HTTPException(
         HTTPStatus.TOO_MANY_REQUESTS, "Too many deliveries", headers={"Retry-After": str(retry_after)}
     )
-
-
-RateLimitedWebhookDep = Annotated[ConfiguredWebhook, Depends(limit_rate)]
 
 
 async def read_limited_body(request: Request, webhook: WebhookDep) -> bytes:
@@ -286,6 +283,18 @@ class LogThrottle:
 
 
 database_error_log = LogThrottle(interval=60)
+
+
+def has_delivery_table() -> bool:
+    from airflow import settings
+    from sqlalchemy import inspect as inspect_database
+
+    from airflow_inbound_webhooks.models import delivery_table
+
+    if settings.engine is None:
+        return False
+    with settings.engine.connect() as connection:
+        return inspect_database(connection).has_table(delivery_table.name, schema=delivery_table.schema)
 
 
 class RecordedMeanwhile(Exception):
@@ -433,8 +442,7 @@ router = APIRouter()
 @router.post("/{name}", status_code=HTTPStatus.ACCEPTED)
 def receive_webhook(
     request: Request,
-    # Before the body, so the rate limit is checked before the body is read.
-    webhook: RateLimitedWebhookDep,
+    webhook: WebhookDep,
     body: Annotated[bytes, Depends(read_limited_body)],
 ) -> dict[str, Any]:
     try:
@@ -446,6 +454,7 @@ def receive_webhook(
         # Answered as a failed verification, so what made the verifier fail cannot be told from outside.
         log.exception("Rejected delivery for webhook %s: verifying it raised", webhook.name)
         raise HTTPException(HTTPStatus.UNAUTHORIZED, "Invalid webhook credentials") from e
+    limit_rate(webhook)
     try:
         event = webhook.source.parse(request.headers, body)
     except ValueError as e:
@@ -458,7 +467,11 @@ def receive_webhook(
         )
     try:
         return record_delivery(webhook, event, hashlib.sha256(body).hexdigest())
-    except UNAVAILABLE_DATABASE_ERRORS as e:
+    except (*UNAVAILABLE_DATABASE_ERRORS, ProgrammingError) as e:
+        # A ProgrammingError that is not about a missing table is a bug, which a sender's retries would
+        # not fix.
+        if isinstance(e, ProgrammingError) and has_delivery_table():
+            raise
         # Once a minute at most: while the database is down, every delivery fails the same way.
         if database_error_log.ready():
             log.exception(

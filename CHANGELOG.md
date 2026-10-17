@@ -17,9 +17,9 @@ breaking change, listed under "Changed event names" with the old and new names.
   delivery ID longer than 255 characters is refused with `400`, and an empty one counts as none.
 - `outcome` and `delivery_id` in every `202` answer. `outcome` is `events_recorded`,
   `no_subscribers`, or `duplicate` for a retry.
-- `[inbound_webhooks] rate_limit_per_minute`, off by default: deliveries over it are answered with
-  `429` and `Retry-After` before their body is read or verified. Each API server worker counts on its
-  own.
+- `[inbound_webhooks] rate_limit_per_minute`, off by default: verified deliveries over it are
+  answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification
+  do not count, and each API server worker counts on its own.
 
 ### Changed
 
@@ -28,6 +28,8 @@ breaking change, listed under "Changed event names" with the old and new names.
   The failure is logged at most once a minute.
 - A source type whose verification raises an unexpected exception answers `401`, like any failed
   verification, instead of `500`.
+- A JSON body holding `NaN` or `Infinity`, which JSON does not allow and MySQL refuses to store, is
+  answered with `400`.
 
 - Upgrading needs `airflow db migrate`, which creates the table. On Airflow 3.1, first add
   `airflow_inbound_webhooks.db.WebhooksDBManager` to `[database] external_db_managers`.
