@@ -15,14 +15,16 @@ documentation is in the [README](../README.md).
 3. The body is read up to `max_body_bytes`.
 4. The source type verifies the signature or token, then parses the delivery into a path and kinds.
 5. `naming.build_candidate_names` turns those into every subscribable name.
-6. If the delivery table already holds the delivery's ID for this webhook, the delivery is a retry:
-   it is answered from that row, and nothing is written.
+6. If the delivery table already holds the delivery's ID and body digest for this webhook, and that
+   delivery recorded events, it is a retry: it is answered from that row, and nothing is written. A
+   delivery that recorded nothing is processed again, so a redelivery after subscribing records it.
 7. One query finds which candidates are active assets, that is, referenced by a Dag.
 8. `asset_manager.register_asset_change` records an asset event on each, which queues the Dags that
    schedule on it, and the delivery's row is inserted. The endpoint commits its own database session
    before responding, so `accepted` means the events and the row are stored. A copy of the delivery
-   that arrives while the first is being recorded fails on the delivery ID's unique constraint,
-   which rolls back its events, and is answered from the first copy's row.
+   that arrives while the first is being recorded fails on the unique constraint, or for a
+   redelivery on an update that only matches a row with no events, which rolls back its events, and
+   it is answered from the first copy's row.
 
 The plugin never creates Dag runs; Airflow's own asset scheduling does.
 
@@ -59,10 +61,11 @@ its own metadata. `db.WebhooksDBManager` puts the table under `airflow db migrat
 later find it through `db-managers` in the provider metadata; 3.1 reads only
 `[database] external_db_managers`.
 
-On Airflow 3.1, `airflow db migrate` builds a new installation's table by running the migrations in
-`migrations/versions`. Later versions build it from the metadata and stamp the newest revision.
-`tests/test_db.py` checks that both give the same schema, so a change to the table needs a model
-change and a migration that agree.
+On Airflow 3.1, `airflow db migrate` builds the table from the metadata when Airflow's own tables
+are new too, and by running the migrations in `migrations/versions` when they exist already.
+Later versions build it from the metadata either way, and stamp the newest revision, unless
+`--use-migration-files` is given. `tests/test_db.py` checks that both give the same schema, so a
+change to the table needs a model change and a migration that agree.
 
 ## Airflow internals the plugin uses
 
@@ -71,7 +74,7 @@ change and a migration that agree.
 | `airflow.assets.manager.asset_manager.register_asset_change` | Records the asset event and queues Dags exactly as Airflow does | Its signature changed in 3.2 and 3.3, and it accepts and drops unknown keyword arguments, so a renamed argument would be lost silently. The endpoint inspects `AssetManager.register_asset_change`: deliveries fail with a `500` if `asset`, `extra` or `session` is no longer a named parameter, and `source_is_api` and `api_user_teams` are passed only where they are (3.3 and later). A deployment can replace the manager with `[core] asset_manager_class`; the check reads Airflow's own class, so a replacement that forwards `**kwargs` still works. |
 | `airflow.models.asset.AssetModel` | Finds which candidate names are active assets | Database models are internal; a relationship was renamed in 3.1 |
 | `airflow.utils.session.create_session` | A database session the endpoint commits before it responds | Same signature in every supported version. It is what the API server's own `SessionDep` wraps; `SessionDep` is marked private and commits in dependency cleanup, whose timing depends on FastAPI (Airflow pins it with `scope="function"` from 3.2). |
-| `airflow.utils.db_manager.BaseDBManager` | Creates and migrates the delivery table as part of `airflow db migrate` | Internal, and its behaviour differs by version: on a new installation, 3.1 runs the migrations and later versions create the table from the metadata. The manager overrides none of its methods, and `tests/test_db.py` checks that both ways give the same schema |
+| `airflow.utils.db_manager.BaseDBManager` | Creates and migrates the delivery table as part of `airflow db migrate` | Internal, and its behaviour differs by version: on an existing Airflow installation, 3.1 runs the migrations, and otherwise the table is created from the metadata. The manager overrides none of its methods, and `tests/test_db.py` checks that both ways give the same schema |
 | `airflow.models.base` (`_get_schema`, `naming_convention`) and `airflow.utils.sqlalchemy.UtcDateTime` | Give the table Airflow's schema setting, constraint names and timestamp type | Internal; the same in every supported version |
 | `airflow.configuration.conf` | Reads the `[inbound_webhooks]` options | How every Airflow component reads its configuration, with the same `get` and `getint` in every supported version. `airflow.sdk.conf` is the Task SDK's parser and only exists from 3.2. |
 | Plugin apps are mounted without authentication | The endpoint must accept services that cannot log in | If Airflow ever required login for plugin apps, every delivery would be rejected |
@@ -91,8 +94,8 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
 ## Open questions
 
 1. **Replay protection.** GitHub signs the body but not a timestamp; GitLab sends a bare token.
-   The delivery table recognises a retry by the sender's delivery ID, which only catches a service's
-   own retries: GitHub's `X-GitHub-Delivery` and GitLab's `Idempotency-Key` are headers no signature
+   The delivery table recognises a retry by the sender's delivery ID and the body's digest, which only
+   catches a service's own retries: GitHub's `X-GitHub-Delivery` and GitLab's `Idempotency-Key` are headers no signature
    covers, so a deliberate replay can change them, and the event headers along with them. Source types
    whose signature covers a timestamp could reject old deliveries. Jira's does, through the `timestamp` in the signed body, but Jira
    Cloud retries a failed delivery for more than an hour, so the window would have to be as long.

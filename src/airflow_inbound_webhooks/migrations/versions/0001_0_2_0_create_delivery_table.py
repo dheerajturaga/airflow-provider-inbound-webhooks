@@ -30,6 +30,7 @@ def upgrade() -> None:
         sa.Column("id", sa.String(length=36), nullable=False),
         sa.Column("webhook", sa.String(length=64), nullable=False),
         sa.Column("delivery_id", sa.String(length=255), nullable=True),
+        sa.Column("body_digest", sa.String(length=64), nullable=False),
         # The type of Airflow's UtcDateTime, with microseconds on MySQL as on the other databases.
         sa.Column(
             "received_at",
@@ -46,10 +47,14 @@ def upgrade() -> None:
         sa.Column("payload", sa.JSON(), nullable=True),
         sa.PrimaryKeyConstraint("id", name="inbound_webhooks_delivery_pkey"),
         sa.UniqueConstraint(
-            "webhook", "delivery_id", name="inbound_webhooks_delivery_webhook_delivery_id_uq"
+            "webhook",
+            "delivery_id",
+            "body_digest",
+            name="inbound_webhooks_delivery_webhook_delivery_id_body_digest_uq",
         ),
     )
     op.create_index("idx_inbound_webhooks_delivery_webhook_received_at", TABLE, ["webhook", "received_at"])
+    op.create_index("idx_inbound_webhooks_delivery_received_at", TABLE, ["received_at"])
     op.create_index("idx_inbound_webhooks_delivery_correlation_key", TABLE, ["correlation_key"])
 
 

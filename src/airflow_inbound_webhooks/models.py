@@ -26,9 +26,11 @@ delivery_table = Table(
     # Assigned by the endpoint, since deliveries from senders without delivery IDs need rows too.
     Column("id", String(36), primary_key=True),
     Column("webhook", String(64), nullable=False),
-    # The sender's ID for the delivery, or null if it sends none. Unique per webhook, so a retry is
-    # recognised; databases treat nulls as distinct, so deliveries without one never collide.
+    # The sender's ID for the delivery, or null if it sends none. With the body's SHA-256, unique per
+    # webhook, so a retry is recognised; databases treat nulls as distinct, so deliveries without an ID
+    # never collide.
     Column("delivery_id", String(255)),
+    Column("body_digest", String(64), nullable=False),
     Column("received_at", UtcDateTime, nullable=False),
     Column("source_type", String(64), nullable=False),
     Column("path", String(1500)),
@@ -39,7 +41,9 @@ delivery_table = Table(
     Column("outcome", String(32), nullable=False),
     Column("team_name", String(50)),
     Column("payload", JSON),
-    UniqueConstraint("webhook", "delivery_id"),
+    UniqueConstraint("webhook", "delivery_id", "body_digest"),
     Index("idx_inbound_webhooks_delivery_webhook_received_at", "webhook", "received_at"),
+    # Deleting old records filters on the time alone.
+    Index("idx_inbound_webhooks_delivery_received_at", "received_at"),
     Index("idx_inbound_webhooks_delivery_correlation_key", "correlation_key"),
 )

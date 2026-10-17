@@ -133,8 +133,9 @@ options a source type reads, and the fields a summary keeps, are public interfac
 ## Changing the delivery table
 
 The table is defined in `src/airflow_inbound_webhooks/models.py` and created by the migrations in
-`src/airflow_inbound_webhooks/migrations/versions/`. Depending on the Airflow version,
-`airflow db migrate` builds a new installation's table from either one, so a change needs both:
+`src/airflow_inbound_webhooks/migrations/versions/`. Depending on the Airflow version, and on
+whether Airflow's own tables exist already, `airflow db migrate` builds the table from either one, so
+a change needs both:
 
 1. Change the table in `models.py`.
 2. Add a revision whose `down_revision` is the current head, named

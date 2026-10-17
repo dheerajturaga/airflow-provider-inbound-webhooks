@@ -11,9 +11,10 @@ breaking change, listed under "Changed event names" with the old and new names.
 ### Added
 
 - Delivery records: every verified delivery is stored in a new table, `inbound_webhooks_delivery`,
-  in the transaction that records its asset events. A retry, recognised by the sender's delivery ID,
-  gets the answer the delivery got and records nothing, so a service's retries no longer queue Dags
-  again. A delivery ID longer than 255 characters is refused with `400`.
+  in the transaction that records its asset events. A retry, which repeats the sender's delivery ID
+  and the body, gets the answer the delivery got and records nothing, so a service's retries no
+  longer queue Dags again. A redelivery of a delivery that recorded nothing is processed again. A
+  delivery ID longer than 255 characters is refused with `400`, and an empty one counts as none.
 
 ### Changed
 

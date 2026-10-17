@@ -14,7 +14,7 @@ from alembic.migration import MigrationContext
 from packaging.version import Version
 from sqlalchemy import inspect
 
-from airflow_inbound_webhooks.app import MAX_DELIVERY_ID_LENGTH
+from airflow_inbound_webhooks.app import MAX_DELIVERY_ID_LENGTH, MAX_PATH_LENGTH, MAX_TEAM_NAME_LENGTH
 from airflow_inbound_webhooks.db import WebhooksDBManager
 from airflow_inbound_webhooks.models import delivery_table, metadata
 
@@ -48,8 +48,8 @@ def test_airflow_db_migrate_creates_the_tables_at_the_latest_revision():
 
 
 def test_migrations_build_the_tables_the_metadata_describes():
-    # Depending on the Airflow version, airflow db migrate builds a new installation's tables from the
-    # metadata or from the migrations, so both must give the same schema.
+    # Depending on the Airflow version, and on whether Airflow's own tables exist already, airflow db
+    # migrate builds the tables from the metadata or by running the migrations, so both must agree.
     with create_session() as session:
         config = WebhooksDBManager(session).get_alembic_config()
     command.downgrade(config, "base")
@@ -61,9 +61,14 @@ def test_migrations_build_the_tables_the_metadata_describes():
         command.upgrade(config, "heads")
 
 
-def test_endpoint_refuses_delivery_ids_the_column_cannot_hold():
+def test_endpoint_bounds_values_as_the_columns_do():
     # The endpoint cannot import the model at module level, which every Airflow process would pay for.
-    assert delivery_table.c.delivery_id.type.length == MAX_DELIVERY_ID_LENGTH
+    columns = delivery_table.c
+    assert (columns.delivery_id.type.length, columns.path.type.length, columns.team_name.type.length) == (
+        MAX_DELIVERY_ID_LENGTH,
+        MAX_PATH_LENGTH,
+        MAX_TEAM_NAME_LENGTH,
+    )
 
 
 def test_airflow_accepts_the_manager():

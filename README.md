@@ -652,11 +652,12 @@ database, in the transaction that records its asset events. The table records th
 sender's delivery ID, when the delivery arrived, the names it offered and the asset events it
 recorded, plus its payload when it recorded any.
 
-A delivery ID is unique per webhook, so a retry is recognised. It gets the answer the delivery got,
-and records nothing. Only senders that send a delivery ID can be recognised this way: GitHub
-(`X-GitHub-Delivery`), GitLab 17.4 and later (`Idempotency-Key`) and Jira
-(`X-Atlassian-Webhook-Identifier`). `hmac_json` and `token_header` deliveries are never taken for
-retries.
+A retry repeats a delivery's ID and its body. It gets the answer the delivery got, and records
+nothing. A redelivery of a delivery that recorded nothing is processed again, so redelivering an
+event after subscribing to one of its names records it. Only senders that send a delivery ID can be
+recognised this way: GitHub (`X-GitHub-Delivery`), GitLab 17.4 and later (`Idempotency-Key`) and
+Jira (`X-Atlassian-Webhook-Identifier`). `hmac_json` and `token_header` deliveries, and deliveries
+with an empty ID, are never taken for retries.
 
 `airflow db migrate` creates and upgrades the table, and `airflow db reset` drops it. On Airflow 3.1
 both need [`external_db_managers`](#compatibility). `airflow db clean` does not remove its rows.
@@ -699,8 +700,9 @@ both need [`external_db_managers`](#compatibility). `airflow db clean` does not 
 - **Retries are recognised, replays are not.** A delivery sent again with the same delivery ID is
   answered as before and records nothing, which covers a service's own retries. A captured delivery
   sent again with another ID is recorded as new: GitHub's delivery ID is a header its signature
-  does not cover, and GitLab sends a token rather than a signature. Other headers outside the
-  signature can be changed too.
+  does not cover, and GitLab sends a token rather than a signature. Because a retry must repeat the
+  body too, a captured body sent under another delivery's ID cannot take that delivery's place.
+  Other headers outside the signature can be changed too.
   Where the event name comes from such a header, as GitHub's `X-GitHub-Event` or an `event_header`
   does, a replayed body can be given another event's name. Signatures over a timestamp would allow
   rejecting old deliveries; see [docs/design.md](docs/design.md).
@@ -714,7 +716,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 |---|---|
 | 3.3 and later | Supported, including `team_name` |
 | 3.2 | Supported; `team_name` is rejected because this version cannot attribute asset events to a team |
-| 3.1.1 to 3.1.x | Supported, without `team_name`, as on 3.2. `airflow db migrate` only runs the DB managers `[database] external_db_managers` names, so add the plugin's before creating or upgrading its table: `external_db_managers = airflow_inbound_webhooks.db.WebhooksDBManager`, or `AIRFLOW__DATABASE__EXTERNAL_DB_MANAGERS` in the environment. On 3.1.1 and 3.1.2 the connection form only shows its fields when Flask-AppBuilder is installed (for example with the FAB provider); otherwise set the fields as JSON in the connection's extra. On later 3.1 patches with Python 3.10, fields with a fixed set of values, such as *Source type*, show as text boxes unless Flask-AppBuilder is installed; their descriptions list the values |
+| 3.1.1 to 3.1.x | Supported, without `team_name`, as on 3.2. `airflow db migrate` only runs the DB managers `[database] external_db_managers` names, so add the plugin's before creating or upgrading its table: `external_db_managers = airflow_inbound_webhooks.db.WebhooksDBManager`, or `AIRFLOW__DATABASE__EXTERNAL_DB_MANAGERS` in the environment. Separate several managers with commas and no spaces, which 3.1 does not strip. On 3.1.1 and 3.1.2 the connection form only shows its fields when Flask-AppBuilder is installed (for example with the FAB provider); otherwise set the fields as JSON in the connection's extra. On later 3.1 patches with Python 3.10, fields with a fixed set of values, such as *Source type*, show as text boxes unless Flask-AppBuilder is installed; their descriptions list the values |
 | 3.0, 3.1.0 | Not supported: their API server cannot read metadata-database connections through `airflow.sdk.Connection`, and installing next to them is refused |
 | 2.x | Not supported: there is no FastAPI API server for the plugin to mount on |
 
