@@ -608,9 +608,23 @@ on_any_deployment()
 
 Iterate over all events rather than taking the first: before Airflow 3.4, and on any Dag with
 `batch_asset_events`, deliveries that arrive before the scheduler creates a run share that run.
-Events are not ordered; sort by `event.timestamp` if order matters. `extra` also holds `source`,
-`path` and `delivery_id` (where the service sends one). Anyone who can read asset events can read
-the payload too; see [Security](#security).
+Events are not ordered; sort by `event.timestamp` if order matters.
+
+Besides `payload`, `extra` holds:
+
+| Key | Value |
+|---|---|
+| `from_webhook` | `true` |
+| `webhook` | The webhook's name, as in `/webhooks/<name>`; `source` holds it too |
+| `source_type` | The connection's source type, such as `github` |
+| `path` | Where the event happened, as in its names |
+| `delivery_id` | The service's ID for the delivery, where it sends one |
+| `correlation_key` | `null`: no source type sets one yet |
+
+Anyone allowed to create asset events, through the REST API or the UI, can create one with the same
+keys, so `from_webhook` says where an event claims to come from, not that a service sent it. Read the
+payload defensively. Anyone who can read asset events can read the payload too; see
+[Security](#security).
 
 More examples, for GitHub labels and pushes, organization-wide releases and GitLab pipelines, are in
 [`examples/dags/ci_cd.py`](examples/dags/ci_cd.py), and for Jira transitions and new issues in
@@ -751,8 +765,8 @@ From 0.1.0 the project follows [Semantic Versioning](https://semver.org/) for it
 - the `inbound_webhook` connection type, the connection options of each source type and the
   `[inbound_webhooks]` configuration options;
 - [event names](#event-names);
-- each asset event's `extra`: the keys `source`, `path`, `delivery_id` and `payload`, and for `jira`
-  the issue fields its summary keeps.
+- each asset event's `extra`: the keys `from_webhook`, `webhook`, `source_type`, `source`, `path`,
+  `delivery_id`, `correlation_key` and `payload`, and for `jira` the issue fields its summary keeps.
 
 Below 1.0, a change that breaks any of them ships only in a new minor version, and the
 [changelog](CHANGELOG.md) describes it. The Python modules are not a public interface yet: code that

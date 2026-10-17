@@ -160,9 +160,13 @@ def test_github_label_triggers_only_subscribed_dags(client, session, subscribe):
     assert len(body["candidates"]) == 9
     assert get_queued_dag_ids(session) == {"web_deploy_preview", "org_deploy_preview", "any_deploy_preview"}
     assert session.scalars(select(AssetEvent.extra)).first() == {
+        "from_webhook": True,
+        "webhook": "github",
+        "source_type": "github",
         "source": "github",
         "path": "my-org/web",
         "delivery_id": "delivery-1",
+        "correlation_key": None,
         "payload": LABELED,
     }
 
@@ -280,9 +284,13 @@ def test_jira_transition_stores_issue_summary(client, session, subscribe):
     assert response.json()["status"] == "accepted"
     assert get_queued_dag_ids(session) == {"deploy_ready_issues"}
     assert session.scalars(select(AssetEvent.extra)).first() == {
+        "from_webhook": True,
+        "webhook": "jira",
+        "source_type": "jira",
         "source": "jira",
         "path": "OPS",
         "delivery_id": "webhook-1",
+        "correlation_key": None,
         "payload": {**payload, "issue": {"key": "OPS-42", "fields": {"project": {"key": "OPS"}}}},
     }
 
@@ -571,6 +579,16 @@ def test_path_too_long_for_its_column_is_stored_shortened(client, session, subsc
     (delivery,) = get_deliveries(session)
     assert delivery.path == "x" * 1500
     assert count_asset_events(session) == 1
+
+
+@mock.patch.dict(os.environ, DEPLOYBOT_CONN)
+def test_event_names_its_webhook_and_source_type(client, session, subscribe):
+    subscribe("smoke_test_billing", "deploybot/billing/deployed")
+
+    post_deploybot(client, {"event": "deployed", "service": "billing"})
+
+    extra = session.scalars(select(AssetEvent.extra)).one()
+    assert (extra["from_webhook"], extra["webhook"], extra["source_type"]) == (True, "deploybot", "hmac_json")
 
 
 @mock.patch.dict(os.environ, DEPLOYBOT_CONN)
