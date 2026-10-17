@@ -316,9 +316,7 @@ class TestJiraSource:
         changelog = {"items": [{"field": "status", "toString": "Ready for Deploy"}]}
         payload = {"webhookEvent": "jira:issue_updated", "issue": self.ISSUE, "changelog": changelog}
 
-        parsed = parse_json(JiraSource(), payload)
-
-        assert parsed.payload == {
+        assert JiraSource().summarize(payload) == {
             "webhookEvent": "jira:issue_updated",
             "issue": {
                 "id": "10042",
@@ -333,16 +331,11 @@ class TestJiraSource:
             "changelog": changelog,
         }
 
-    def test_full_payload_is_stored_as_received(self):
+    def test_parse_keeps_the_payload_as_received(self):
+        # The connection's store_payload decides what is stored of it.
         payload = {"webhookEvent": "jira:issue_created", "issue": self.ISSUE}
 
-        parsed = parse_json(JiraSource.from_extra({"store_payload": "full"}), payload)
-
-        assert parsed.payload == payload
-
-    def test_from_extra_rejects_unknown_store_payload(self):
-        with pytest.raises(ValueError, match="jira store_payload"):
-            JiraSource.from_extra({"store_payload": "none"})
+        assert parse_json(JiraSource(), payload).payload == payload
 
     def test_parse_rejects_missing_webhook_event(self):
         with pytest.raises(ValueError, match="webhookEvent"):

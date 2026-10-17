@@ -29,6 +29,7 @@ from airflow_inbound_webhooks import configuration
 from airflow_inbound_webhooks.naming import build_candidate_names
 from airflow_inbound_webhooks.sources import (
     SOURCE_TYPES,
+    STORED_PAYLOADS,
     WebhookEvent,
     WebhookSource,
     WebhookVerificationError,
@@ -94,6 +95,13 @@ class ConfiguredWebhook:
     secret: str
     team_name: str | None
     max_body_bytes: int
+    store_payload: str
+
+    def select_payload(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Return what the connection's ``store_payload`` keeps of a delivery's payload."""
+        if self.store_payload == "summary":
+            return self.source.summarize(payload)
+        return payload if self.store_payload == "full" else None
 
 
 def resolve_webhook(name: str) -> ConfiguredWebhook:
@@ -119,6 +127,14 @@ def resolve_webhook(name: str) -> ConfiguredWebhook:
         source_type = extra.get("source_type", name)
         if source_type not in SOURCE_TYPES:
             raise ValueError(f"unknown source_type {source_type!r}; expected one of {sorted(SOURCE_TYPES)}")
+        source_class = SOURCE_TYPES[source_type]
+        store_payload = extra.get("store_payload", source_class.default_store_payload)
+        if store_payload not in STORED_PAYLOADS:
+            raise ValueError(f"store_payload must be one of {STORED_PAYLOADS}")
+        if store_payload == "summary" and not source_class.has_summary:
+            raise ValueError(
+                f"source_type {source_type} has no summary, so store_payload must be full or none"
+            )
         if not conn.password:
             raise ValueError("the password, which holds the shared secret, is empty")
         if extra.get("team_name") and not supports_team_attribution():
@@ -131,10 +147,11 @@ def resolve_webhook(name: str) -> ConfiguredWebhook:
         return ConfiguredWebhook(
             name=name,
             source_type=source_type,
-            source=SOURCE_TYPES[source_type].from_extra(extra),
+            source=source_class.from_extra(extra),
             secret=conn.password,
             team_name=extra.get("team_name"),
             max_body_bytes=max_body_bytes,
+            store_payload=store_payload,
         )
     except ValueError as e:
         log.error("Webhook connection %s is misconfigured: %s", conn_id, e)
@@ -399,6 +416,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
     from airflow_inbound_webhooks.models import DAG_PAUSED, EVENTS_RECORDED, NO_SUBSCRIBERS, delivery_table
 
     candidates = build_candidate_names(webhook.name, event)
+    payload = webhook.select_payload(event.payload)
     extra = {
         # Set here, as Airflow sets from_rest_api, so Dags can tell webhook events apart. Anyone allowed to
         # create asset events can set it too, so it marks where an event says it came from, not proof.
@@ -410,7 +428,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
         "path": event.path,
         "delivery_id": event.delivery_id,
         "correlation_key": event.correlation_key,
-        "payload": event.payload,
+        "payload": payload,
     }
     team_arguments: dict[str, Any] = (
         {"source_is_api": True, "api_user_teams": {webhook.team_name} if webhook.team_name else set()}
@@ -448,7 +466,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
                 "outcome": outcome,
                 # A delivery no Dag subscribes to keeps its names, for troubleshooting, but not its
                 # payload, so a sender that sends every event does not fill the table.
-                "payload": event.payload if asset_events else None,
+                "payload": payload if asset_events else None,
             }
             if original is None:
                 session.execute(
