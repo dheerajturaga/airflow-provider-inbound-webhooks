@@ -14,7 +14,7 @@ import hmac
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from starlette.datastructures import Headers
@@ -34,8 +34,8 @@ class WebhookEvent:
     :param kinds: What happened, each from broad to specific
         (``("pull_request", "labeled", "deploy-preview")``). Every prefix of every kind is a
         candidate asset name, so one delivery can be subscribed to at several levels.
-    :param payload: What each asset event stores as ``extra["payload"]``: the body, or a summary of
-        it for senders whose bodies are large.
+    :param payload: The body as received. The connection's ``store_payload`` decides what asset
+        events and the delivery record keep of it.
     :param correlation_key: What the delivery is about, such as a pull request or a job run, so that
         deliveries about the same thing can be found together. No source type sets one yet.
     """
@@ -50,6 +50,11 @@ class WebhookEvent:
 class WebhookSource(ABC):
     """Verifies and describes deliveries from one kind of sender."""
 
+    # What is stored of a delivery's payload unless the connection's store_payload says otherwise.
+    default_store_payload: ClassVar[str] = "full"
+    # Whether summarize() keeps less than the payload, which store_payload "summary" needs.
+    has_summary: ClassVar[bool] = False
+
     @classmethod
     def from_extra(cls, extra: dict[str, Any]) -> WebhookSource:
         """Build from the ``webhook_<name>`` connection's extra; raise ``ValueError`` if it is invalid."""
@@ -62,6 +67,10 @@ class WebhookSource(ABC):
     @abstractmethod
     def parse(self, headers: Headers, body: bytes) -> WebhookEvent:
         """Describe a verified request; raise ``ValueError`` if the body is malformed."""
+
+    def summarize(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Return the parts of a payload worth storing, for source types with ``has_summary``."""
+        return payload
 
 
 def refuse_constant(name: str) -> Any:
@@ -228,7 +237,7 @@ class GitLabSource(WebhookSource):
         )
 
 
-STORED_PAYLOADS = ("summary", "full")
+STORED_PAYLOADS = ("full", "summary", "none")
 # Kept in a summary's issue.fields; the full issue repeats every field, custom fields included.
 JIRA_SUMMARY_FIELDS = frozenset(
     {
@@ -246,7 +255,6 @@ JIRA_SUMMARY_FIELDS = frozenset(
 )
 
 
-@dataclass(frozen=True, kw_only=True)
 class JiraSource(WebhookSource):
     """
     Jira Cloud and Jira Data Center webhooks with a secret, which sign the body like GitHub does.
@@ -260,14 +268,8 @@ class JiraSource(WebhookSource):
     ``store_payload`` set to ``full`` stores the body as received.
     """
 
-    store_payload: str = "summary"
-
-    @classmethod
-    def from_extra(cls, extra: dict[str, Any]) -> JiraSource:
-        store_payload = extra.get("store_payload", "summary")
-        if store_payload not in STORED_PAYLOADS:
-            raise ValueError(f"jira store_payload must be one of {STORED_PAYLOADS}")
-        return cls(store_payload=store_payload)
+    default_store_payload = "summary"
+    has_summary = True
 
     def verify(self, headers: Headers, body: bytes, secret: str) -> None:
         verify_hmac_sha256(headers.get("X-Hub-Signature"), secret, body, prefix="sha256=")
@@ -285,7 +287,7 @@ class JiraSource(WebhookSource):
             path=get_text(payload, "issue.fields.project.key") or get_text(payload, "project.key"),
             kinds=list(dict.fromkeys([kind, *self.find_changes(event, payload)])),
             delivery_id=headers.get("X-Atlassian-Webhook-Identifier"),
-            payload=payload if self.store_payload == "full" else self.summarize(payload),
+            payload=payload,
         )
 
     @staticmethod
@@ -306,8 +308,7 @@ class JiraSource(WebhookSource):
                 changes.extend((event, "labeled", label) for label in current if label not in previous)
         return changes
 
-    @staticmethod
-    def summarize(payload: dict[str, Any]) -> dict[str, Any]:
+    def summarize(self, payload: dict[str, Any]) -> dict[str, Any]:
         issue = payload.get("issue")
         if not isinstance(issue, dict) or not isinstance(fields := issue.get("fields"), dict):
             return payload

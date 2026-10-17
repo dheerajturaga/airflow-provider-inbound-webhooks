@@ -116,6 +116,10 @@ lookup and recording, is shared. Source types live in `src/airflow_inbound_webho
      missing: any other exception answers the delivery with a `500`, which services retry.
    - `from_extra(extra)`, if the type has options: build it from the connection extra and raise
      `ValueError` naming the problem, which the endpoint reports as a misconfigured connection.
+   - `summarize(payload)`, if every delivery carries a full copy of the object it is about: return
+     the parts worth storing, and set `has_summary = True`, so `store_payload` can be `summary`. Set
+     `default_store_payload = "summary"` too if that should be the default, as `jira` does. `parse()`
+     always returns the payload as received.
 2. Register it in `SOURCE_TYPES`, and add it, and any new options, to the connection form in
    `src/airflow_inbound_webhooks/connection_form.py`.
 3. Add tests in `tests/test_sources.py` for verification (valid, missing, wrong) and parsing, and an

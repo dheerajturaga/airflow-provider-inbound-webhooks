@@ -295,6 +295,56 @@ def test_jira_transition_stores_issue_summary(client, session, subscribe):
     }
 
 
+@pytest.mark.parametrize(
+    ("conn_env", "expected_payload"),
+    [
+        pytest.param(build_conn_env("github", store_payload="none"), None, id="none"),
+        pytest.param(build_conn_env("github", store_payload="full"), LABELED, id="full"),
+        pytest.param(GITHUB_CONN, LABELED, id="full-by-default"),
+    ],
+)
+def test_stored_payload_follows_the_connection(client, session, subscribe, conn_env, expected_payload):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    with mock.patch.dict(os.environ, conn_env):
+        assert post_github(client).json()["outcome"] == "events_recorded"
+
+    assert session.scalars(select(AssetEvent.extra)).one()["payload"] == expected_payload
+    assert [delivery.payload for delivery in get_deliveries(session)] == [expected_payload]
+
+
+@mock.patch.dict(os.environ, build_conn_env("github", store_payload="summary"))
+def test_summary_on_a_source_type_without_one_keeps_the_whole_payload(client, session, subscribe, caplog):
+    # 0.1.0's form offered summary for every source type, and only jira used it.
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    assert post_github(client).status_code == 202
+
+    assert session.scalars(select(AssetEvent.extra)).one()["payload"] == LABELED
+    assert any("store_payload to summary" in record.getMessage() for record in caplog.records)
+
+
+@mock.patch.dict(os.environ, build_conn_env("jira", store_payload="full"))
+def test_jira_stores_the_whole_issue_when_asked(client, session, subscribe):
+    subscribe("new_bugs", "jira/OPS/issue_created")
+    payload = {
+        "webhookEvent": "jira:issue_created",
+        "issue": {"key": "OPS-1", "fields": {"project": {"key": "OPS"}, "description": "A long description"}},
+    }
+    body = json.dumps(payload).encode()
+
+    client.post(
+        "/jira",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "X-Hub-Signature": f"sha256={hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()}",
+        },
+    )
+
+    assert session.scalars(select(AssetEvent.extra)).one()["payload"] == payload
+
+
 @mock.patch.dict(os.environ, DEPLOYBOT_CONN)
 def test_any_hmac_service_configured_from_connection_extra(client, session, subscribe):
     subscribe("smoke_test_billing", "deploybot/billing/deployed")
@@ -420,6 +470,14 @@ def test_rejected_delivery(client, session, subscribe, delivery, expected_status
                 "extra": {"source_type": "github", "team_name": "t" * 51},
             },
             id="team-name-too-long",
+        ),
+        pytest.param(
+            {
+                "conn_type": "generic",
+                "password": SECRET,
+                "extra": {"source_type": "github", "store_payload": "everything"},
+            },
+            id="unknown-store-payload",
         ),
     ],
 )
