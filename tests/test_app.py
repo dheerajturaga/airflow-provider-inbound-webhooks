@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -19,12 +20,13 @@ from airflow.models.asset import AssetDagRunQueue, AssetEvent
 from airflow.models.connection import Connection as ConnectionModel
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from airflow_inbound_webhooks import app
 from airflow_inbound_webhooks.app import build_app, get_asset_change_arguments
 from airflow_inbound_webhooks.models import delivery_table
+from airflow_inbound_webhooks.sources import GitHubSource
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Row
@@ -114,16 +116,20 @@ def client():
     return TestClient(build_app())
 
 
+def forget_process_state() -> None:
+    app.resolved_webhooks.clear()
+    app.resolve_locks.clear()
+    app.warn_no_webhook_names.cache_clear()
+    app.rate_limit_buckets.clear()
+    app.database_error_log.last = -math.inf
+
+
 @pytest.fixture(autouse=True)
 def fresh_webhook_cache():
-    """Forget resolved connections, which would otherwise outlive the test that created them."""
-    app.resolved_webhooks.clear()
-    app.resolve_locks.clear()
-    app.warn_no_webhook_names.cache_clear()
+    """Forget resolved connections and rate limits, which would otherwise outlive the test that set them."""
+    forget_process_state()
     yield
-    app.resolved_webhooks.clear()
-    app.resolve_locks.clear()
-    app.warn_no_webhook_names.cache_clear()
+    forget_process_state()
 
 
 @pytest.fixture
@@ -195,6 +201,8 @@ def test_no_subscribers_is_acknowledged_with_candidates(client, session):
     assert response.status_code == 202
     assert response.json() == {
         "status": "no_subscribers",
+        "outcome": "no_subscribers",
+        "delivery_id": "delivery-1",
         "asset_events": {},
         "candidates": [
             "github/my-org/web/pull_request",
@@ -422,7 +430,8 @@ def test_delivery_is_not_acknowledged_when_its_events_are_not_stored(session, su
     with mock.patch.object(Session, "commit", side_effect=commit_failure):
         response = post_github(TestClient(build_app(), raise_server_exceptions=False))
 
-    assert response.status_code == 500
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "30"
     assert count_asset_events(session) == 0
     assert get_deliveries(session) == []
 
@@ -471,7 +480,7 @@ def test_retried_delivery_is_answered_as_before_and_not_recorded_again(client, s
     first, retry = post_github(client), post_github(client)
 
     assert retry.status_code == 202
-    assert retry.json() == first.json()
+    assert retry.json() == {**first.json(), "outcome": "duplicate"}
     assert count_asset_events(session) == 1
     assert len(get_deliveries(session)) == 1
 
@@ -489,7 +498,7 @@ def test_retry_recorded_concurrently_gets_the_answer_of_the_delivery_it_repeats(
     with mock.patch.object(app, "find_delivery", side_effect=find_after_the_first_delivery_committed) as find:
         retry = post_github(client)
 
-    assert retry.json() == first.json()
+    assert retry.json() == {**first.json(), "outcome": "duplicate"}
     assert count_asset_events(session) == 1
     assert len(get_deliveries(session)) == 1
 
@@ -526,7 +535,7 @@ def test_redelivery_recorded_meanwhile_gets_the_answer_of_the_copy_that_recorded
     with mock.patch.object(app, "find_delivery", side_effect=find_before_the_other_copy_committed) as find:
         retry = post_github(client)
 
-    assert retry.json() == first.json()
+    assert retry.json() == {**first.json(), "outcome": "duplicate"}
     assert count_asset_events(session) == 1
 
 
@@ -588,6 +597,123 @@ def test_delivery_id_longer_than_can_be_stored_is_refused(client, session):
 
     assert response.status_code == 400
     assert response.json() == {"detail": "Delivery ID is longer than 255 characters"}
+    assert get_deliveries(session) == []
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+@pytest.mark.parametrize(
+    ("subscribed", "posts", "expected_outcome"),
+    [
+        pytest.param(True, 1, "events_recorded", id="recorded"),
+        pytest.param(False, 1, "no_subscribers", id="unmatched"),
+        pytest.param(True, 2, "duplicate", id="retry"),
+    ],
+)
+def test_response_says_what_became_of_the_delivery(client, subscribe, subscribed, posts, expected_outcome):
+    if subscribed:
+        subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    for _ in range(posts):
+        body = post_github(client).json()
+
+    assert (body["outcome"], body["delivery_id"]) == (expected_outcome, "delivery-1")
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(rate_limit_per_minute="2")})
+def test_deliveries_over_the_rate_limit_are_refused_until_it_refills(client):
+    with mock.patch("airflow_inbound_webhooks.app.time") as mock_time:
+        mock_time.monotonic.return_value = 1000.0
+        responses = [post_github(client, delivery_id=f"delivery-{n}") for n in range(3)]
+        # Two a minute is one more delivery every 30 seconds.
+        mock_time.monotonic.return_value = 1030.0
+        responses.append(post_github(client, delivery_id="delivery-3"))
+
+    assert [response.status_code for response in responses] == [202, 202, 429, 202]
+    assert responses[2].headers["Retry-After"] == "30"
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(rate_limit_per_minute="1")})
+def test_requests_that_fail_verification_do_not_use_up_the_rate_limit(client):
+    # Otherwise anyone could have the sender's own deliveries refused.
+    statuses = [post_github(client, secret="wrong").status_code for _ in range(3)]
+    statuses += [post_github(client, delivery_id=f"delivery-{n}").status_code for n in range(2)]
+
+    assert statuses == [401, 401, 401, 202, 429]
+
+
+@mock.patch.dict(
+    os.environ,
+    {
+        **GITHUB_CONN,
+        **build_conn_env("github_enterprise", source_type="github"),
+        **build_config_env(rate_limit_per_minute="1"),
+    },
+)
+def test_each_webhook_has_its_own_rate_limit(client):
+    paths = ["/github", "/github", "/github_enterprise"]
+
+    assert [post_github(client, path=path).status_code for path in paths] == [202, 429, 202]
+
+
+@mock.patch.dict(
+    os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="github", rate_limit_per_minute="1")}
+)
+def test_unlisted_names_never_reach_the_rate_limit(client):
+    for _ in range(3):
+        assert client.post("/gitlab", json={}).status_code == 404
+
+    assert post_github(client).status_code == 202
+    assert app.rate_limit_buckets.keys() == {"github"}
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+@pytest.mark.parametrize(
+    ("error", "table_exists"),
+    [
+        pytest.param(
+            OperationalError("SELECT", {}, Exception("could not connect")), True, id="database-down"
+        ),
+        pytest.param(
+            ProgrammingError("SELECT", {}, Exception("relation does not exist")),
+            False,
+            id="table-not-created",
+        ),
+    ],
+)
+def test_unusable_database_is_answered_as_temporarily_unavailable(client, caplog, error, table_exists):
+    with (
+        mock.patch.object(app, "find_delivery", side_effect=error),
+        mock.patch.object(app, "has_delivery_table", return_value=table_exists),
+    ):
+        responses = [post_github(client) for _ in range(2)]
+
+    assert [(r.status_code, r.headers.get("Retry-After"), r.json()) for r in responses] == [
+        (503, "30", {"detail": "Temporarily unavailable"})
+    ] * 2
+    # Once, though both failed: while the database is down, every delivery fails the same way.
+    errors = [
+        record for record in caplog.records if record.name == app.__name__ and record.levelno == logging.ERROR
+    ]
+    assert len(errors) == 1
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_other_programming_errors_are_not_taken_for_an_unavailable_database():
+    # With the table there, the error is a bug, which retrying would not fix.
+    error = ProgrammingError("SELECT", {}, Exception("syntax error"))
+
+    with mock.patch.object(app, "find_delivery", side_effect=error):
+        response = post_github(TestClient(build_app(), raise_server_exceptions=False))
+
+    assert response.status_code == 500
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_verifier_that_raises_is_answered_as_a_failed_verification(client, session):
+    with mock.patch.object(GitHubSource, "verify", side_effect=KeyError("X-Hub-Signature-256")):
+        response = post_github(client)
+
+    assert (response.status_code, response.json()) == (401, {"detail": "Invalid webhook credentials"})
     assert get_deliveries(session) == []
 
 
