@@ -683,6 +683,23 @@ with an empty ID, are never taken for retries.
 `airflow db migrate` creates and upgrades the table, and `airflow db reset` drops it. On Airflow 3.1
 both need [`external_db_managers`](#compatibility). `airflow db clean` does not remove its rows.
 
+### Audit log and metrics
+
+A delivery that records asset events writes an entry to Airflow's audit log, in the same
+transaction: event `webhook_delivery`, owner `webhook:<name>`, shown as "Webhook <name>", with the
+delivery ID and the recorded asset events in its extra. The entry has no Dag or run, because the
+scheduler creates the runs later. Deliveries that record nothing, retries and refused requests
+write no entry.
+
+The endpoint sends these metrics through Airflow's metrics configuration, each tagged with
+`webhook`:
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `inbound_webhooks.deliveries.<outcome>` | Counter | Answered deliveries, by `outcome` |
+| `inbound_webhooks.rejections.<status>` | Counter | Refused requests, by status code. Names not in `webhook_names` share the tag value `other` |
+| `inbound_webhooks.delivery_duration` | Timer | Time spent recording a verified delivery |
+
 ### Responses and troubleshooting
 
 A `202` answer has these fields:
@@ -783,8 +800,6 @@ response's `detail` or in the API server log.
 - No replay protection: retries are recognised by their delivery ID, deliberate replays are not.
 - Each recorded asset event stores the delivery's payload, unless `store_payload` says otherwise,
   and anyone who can read asset events can see it.
-- Asset events from webhooks are not written to Airflow's audit log, because a delivery has no
-  Airflow user.
 - Delivery records are kept until you delete them from `inbound_webhooks_delivery`.
 - Renaming a repository, project or service changes its event names, so Dags must be updated.
 - The plugin uses some Airflow internals (`asset_manager`, `AssetModel`, `create_session`,

@@ -86,6 +86,8 @@ change to the table needs a model change and a migration that agree.
 | `airflow.utils.session.create_session` | A database session the endpoint commits before it responds | Same signature in every supported version. It is what the API server's own `SessionDep` wraps; `SessionDep` is marked private and commits in dependency cleanup, whose timing depends on FastAPI (Airflow pins it with `scope="function"` from 3.2). |
 | `airflow.utils.db_manager.BaseDBManager` | Creates and migrates the delivery table as part of `airflow db migrate` | Internal, and its behaviour differs by version: on an existing Airflow installation, 3.1 runs the migrations, and otherwise the table is created from the metadata. The manager overrides none of its methods, and `tests/test_db.py` checks that both ways give the same schema |
 | `airflow.models.base` (`_get_schema`, `naming_convention`) and `airflow.utils.sqlalchemy.UtcDateTime` | Give the table Airflow's schema setting, constraint names and timestamp type | Internal; the same in every supported version |
+| `airflow.models.log.Log` | Writes the audit log entry for a delivery that records events | Internal; the same constructor in every supported version, and a `team_name` column only from 3.4, which the entry sets where it exists |
+| `Stats` from `airflow.sdk.observability.stats`, or `airflow.stats` on 3.1 | Sends the delivery metrics | It moved to the Task SDK in 3.2; `airflow.stats` remains as a deprecated alias |
 | `airflow.configuration.conf` | Reads the `[inbound_webhooks]` options | How every Airflow component reads its configuration, with the same `get` and `getint` in every supported version. `airflow.sdk.conf` is the Task SDK's parser and only exists from 3.2. |
 | Plugin apps are mounted without authentication | The endpoint must accept services that cannot log in | If Airflow ever required login for plugin apps, every delivery would be rejected |
 
@@ -126,7 +128,10 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
    carries a full copy of the object it is about; only Jira's do, so `jira` alone stores a summary by
    default. Every connection can set `store_payload` to `full`, `summary` where the source type has
    one, or `none`. Anyone who can read asset events can read the payloads that are kept.
-5. **Audit.** The REST API writes an action log entry per user; a delivery has no user.
+5. **Audit.** The REST API writes an audit log entry per user; a delivery has no user, so a
+   delivery that records events writes one owned by `webhook:<name>`, with a display name, which
+   Airflow's audit log page needs to show the owner. Rejected requests write none: anyone can send
+   them, and they are counted in a metric instead.
 6. **Name stability.** From 0.1.0, changing a name that an existing delivery produces is a breaking
    change, released in a new minor version below 1.0 (README, "Event names"). Renaming a repository
    or project still changes its names, which the plugin cannot prevent.

@@ -19,6 +19,7 @@ from airflow.assets.manager import AssetManager
 from airflow.models.asset import AssetDagRunQueue, AssetEvent
 from airflow.models.connection import Connection as ConnectionModel
 from airflow.models.dag import DagModel
+from airflow.models.log import Log
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import OperationalError, ProgrammingError
@@ -106,6 +107,16 @@ def count_asset_events(session) -> int:
 
 def get_deliveries(session) -> list[Row]:
     return list(session.execute(select(delivery_table).order_by(delivery_table.c.received_at)))
+
+
+def get_audit_log(session) -> list[Log]:
+    return list(session.scalars(select(Log).where(Log.event == "webhook_delivery")))
+
+
+@pytest.fixture
+def stats():
+    with mock.patch.object(app, "get_stats") as get_stats:
+        yield get_stats.return_value
 
 
 def get_queued_dag_ids(session) -> set[str]:
@@ -1024,3 +1035,58 @@ def test_connection_is_read_on_every_delivery(client, connection_lookups, config
 
     assert statuses == [202, 202]
     assert connection_lookups.call_count == 2
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_recorded_delivery_is_written_to_the_audit_log(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    asset_events = post_github(client).json()["asset_events"]
+
+    (entry,) = get_audit_log(session)
+    # No Dag or run: the scheduler creates the runs later.
+    assert (entry.owner, entry.owner_display_name, entry.dag_id, entry.run_id) == (
+        "webhook:github",
+        "Webhook github",
+        None,
+        None,
+    )
+    assert json.loads(entry.extra) == {"delivery_id": "delivery-1", "asset_events": asset_events}
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_deliveries_that_record_nothing_are_not_audited(client, session, subscribe):
+    assert post_github(client, delivery_id="unmatched").json()["outcome"] == "no_subscribers"
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    assert post_github(client).json()["outcome"] == "events_recorded"
+    assert post_github(client).json()["outcome"] == "duplicate"
+    assert post_github(client, secret="wrong").status_code == 401
+
+    assert len(get_audit_log(session)) == 1
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_answered_deliveries_are_counted_and_timed(client, subscribe, stats):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    for _ in range(2):
+        post_github(client)
+
+    assert stats.incr.call_args_list == [
+        mock.call("inbound_webhooks.deliveries.events_recorded", tags={"webhook": "github"}),
+        mock.call("inbound_webhooks.deliveries.duplicate", tags={"webhook": "github"}),
+    ]
+    stats.timer.assert_called_with("inbound_webhooks.delivery_duration", tags={"webhook": "github"})
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="github")})
+def test_rejections_are_counted_by_status_with_unlisted_names_together(client, stats):
+    post_github(client, secret="wrong")
+    client.post("/random-name", json={})
+    client.get("/github")
+
+    assert stats.incr.call_args_list == [
+        mock.call("inbound_webhooks.rejections.401", tags={"webhook": "github"}),
+        mock.call("inbound_webhooks.rejections.404", tags={"webhook": "other"}),
+        mock.call("inbound_webhooks.rejections.405", tags={"webhook": "github"}),
+    ]
