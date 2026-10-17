@@ -400,9 +400,16 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
 
     candidates = build_candidate_names(webhook.name, event)
     extra = {
+        # Set here, as Airflow sets from_rest_api, so Dags can tell webhook events apart. Anyone allowed to
+        # create asset events can set it too, so it marks where an event says it came from, not proof.
+        "from_webhook": True,
+        "webhook": webhook.name,
+        "source_type": webhook.source_type,
+        # The same as webhook, kept because it was public first.
         "source": webhook.name,
         "path": event.path,
         "delivery_id": event.delivery_id,
+        "correlation_key": event.correlation_key,
         "payload": event.payload,
     }
     team_arguments: dict[str, Any] = (
@@ -452,6 +459,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
                         body_digest=body_digest,
                         received_at=datetime.now(tz=timezone.utc),
                         source_type=webhook.source_type,
+                        correlation_key=event.correlation_key,
                         # Longer paths cannot be in an asset name anyway.
                         path=None if event.path is None else event.path[:MAX_PATH_LENGTH],
                         team_name=webhook.team_name,

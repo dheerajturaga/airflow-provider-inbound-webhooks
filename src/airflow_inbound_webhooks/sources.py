@@ -36,12 +36,15 @@ class WebhookEvent:
         candidate asset name, so one delivery can be subscribed to at several levels.
     :param payload: What each asset event stores as ``extra["payload"]``: the body, or a summary of
         it for senders whose bodies are large.
+    :param correlation_key: What the delivery is about, such as a pull request or a job run, so that
+        deliveries about the same thing can be found together. No source type sets one yet.
     """
 
     path: str | None
     kinds: list[tuple[str, ...]]
     delivery_id: str | None
     payload: dict[str, Any]
+    correlation_key: str | None = None
 
 
 class WebhookSource(ABC):
