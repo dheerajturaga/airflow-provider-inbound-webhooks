@@ -133,11 +133,20 @@ def resolve_webhook(name: str) -> ConfiguredWebhook:
     """
     if not WEBHOOK_NAME_PATTERN.fullmatch(name):
         raise HTTPException(HTTPStatus.NOT_FOUND, "Unknown webhook")
-    conn_id = f"{CONN_ID_PREFIX}{name}"
     try:
-        conn = Connection.get(conn_id)
+        conn = Connection.get(f"{CONN_ID_PREFIX}{name}")
     except AirflowNotFoundException:
         raise HTTPException(HTTPStatus.NOT_FOUND, "Unknown webhook") from None
+    return configure_webhook(name, conn)
+
+
+def configure_webhook(name: str, conn: Any) -> ConfiguredWebhook:
+    """
+    Build webhook ``name`` from its connection, answering ``503`` if the connection is misconfigured.
+
+    The ``ValueError`` saying why is the ``HTTPException``'s cause.
+    """
+    conn_id = f"{CONN_ID_PREFIX}{name}"
     # The connection form saves fields left empty as null or "", which mean "not set".
     extra = {key: value for key, value in conn.extra_dejson.items() if value not in (None, "")}
     try:

@@ -8,6 +8,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import uuid
+from datetime import datetime, timezone
 from importlib.metadata import version
 from pathlib import Path
 
@@ -129,3 +131,32 @@ def subscribe(session):
         session.commit()
 
     return subscribe_dag
+
+
+@pytest.fixture
+def add_delivery(session):
+    """Store a delivery record, as a recorded GitHub delivery would leave one."""
+
+    def add(**values) -> str:
+        row = {
+            "id": str(uuid.uuid4()),
+            "webhook": "github",
+            # Unique per webhook, like a sender's.
+            "delivery_id": str(uuid.uuid4()),
+            "body_digest": "0" * 64,
+            "received_at": datetime(2026, 10, 17, 12, tzinfo=timezone.utc),
+            "source_type": "github",
+            "path": "my-org/web",
+            "candidates": ["github/my-org/web/push"],
+            "asset_events": {"github/my-org/web/push": 1},
+            "correlation_key": None,
+            "outcome": "events_recorded",
+            "team_name": None,
+            "payload": {"ref": "refs/heads/main"},
+            **values,
+        }
+        session.execute(delivery_table.insert().values(**row))
+        session.commit()
+        return row["id"]
+
+    return add

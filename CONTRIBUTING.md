@@ -61,6 +61,8 @@ The tests are organised as:
 | `tests/test_examples.py` | That every example Dag file builds against the installed Airflow, and that the README quick start writes the quick start Dag unchanged |
 | `tests/test_provider_info.py` | That the provider metadata conforms to the installed Airflow's schema |
 | `tests/test_db.py` | The delivery table: created by `airflow db migrate`, and the same whether built from the metadata or the migrations |
+| `tests/test_deliveries.py` | The deliveries API and page, in process, with the auth manager replaced |
+| `tests/test_cli.py` | The `airflow webhooks` commands, and that both ways of running them offer them |
 
 Every change in behaviour needs a test that fails without it.
 

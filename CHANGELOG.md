@@ -28,6 +28,9 @@ breaking change, listed under "Changed event names" with the old and new names.
   `GET /webhooks/_deliveries/<name>`. Both need an Airflow login and permission to read the
   webhook's connection.
 - `GET /webhooks/_health`, answered without a login.
+- `airflow webhooks check`, `deliveries`, `clean` and `send-test`, on Airflow 3.2 and later, and as
+  `python -m airflow_inbound_webhooks.cli` on 3.1. `clean` deletes delivery records older than the
+  new `[inbound_webhooks] delivery_retention_days`, 7 by default.
 - An audit log entry for each delivery that records asset events, owned by `webhook:<name>`.
 - Metrics: `inbound_webhooks.deliveries.<outcome>`, `inbound_webhooks.rejections.<status>` and
   `inbound_webhooks.delivery_duration`, each tagged with the webhook.
