@@ -685,22 +685,25 @@ both need [`external_db_managers`](#compatibility). `airflow db clean` does not 
 
 ### Reading deliveries
 
-Under **Browse → Webhook deliveries**, the Airflow UI lists each webhook's latest deliveries: when
-each arrived, its outcome, delivery ID and path, and the asset events it recorded. Each delivery's
-page shows the names it offered and its stored payload, which makes it the place to find the name to
-subscribe to.
+Under **Browse → Webhook deliveries**, the Airflow UI lists the webhooks in `webhook_names` whose
+deliveries you may read, and has a field for any other webhook's name. A webhook's page lists its
+latest deliveries: when each arrived, its outcome, delivery ID and path, and the asset events it
+recorded. Each delivery's page shows the names it offered and its stored payload, which makes it the
+place to find the name to subscribe to.
 
 The same records are served as JSON, to a bearer token from Airflow's `/auth/token` or the UI's
 session:
 
 | Route | Returns |
 |---|---|
-| `GET /webhooks/_deliveries/<name>?limit=50&before=<time>` | A webhook's deliveries, newest first, without payloads. `limit` is 1 to 500; `before` pages back |
+| `GET /webhooks/_deliveries/<name>?limit=50&before=<time>&before_id=<id>` | A webhook's deliveries, newest first, without payloads. `limit` is 1 to 500. To page back, pass the last delivery's `received_at` and `id` as `before` and `before_id` |
 | `GET /webhooks/_deliveries/<name>/<id>` | One delivery, with its payload |
 
-Reading a webhook's deliveries needs permission to read its connection, `webhook_<name>`, for the
-connection's `team_name` where it has one. The page and these routes are not a public interface yet,
-and can change in any release.
+Reading a webhook's deliveries needs permission to read its connection, `webhook_<name>`, checked
+for the team its extra's `team_name` names, and shows only the deliveries attributed to that team. A
+webhook whose connection cannot be read shows nothing: Airflow reports a secrets backend it could
+not read as a missing connection, so there would be no team to check. The page and these routes are
+not a public interface yet, and can change in any release.
 
 `GET /webhooks/_health` answers `200` without a login, for load balancers and probes.
 
@@ -762,8 +765,8 @@ A `202` answer has these fields:
   sender writes; requests that fail verification never count against it. Forward each webhook's
   path rather than all of `/webhooks`, which also holds the deliveries page and API.
 - **Reading deliveries needs a login.** The deliveries page and API under `/webhooks` need an
-  Airflow login, and permission to read the webhook's connection, the same permission that shows its
-  secret.
+  Airflow login, and permission to read the webhook's connection for the team its extra names.
+  Deliveries attributed to another team are not shown.
 - **Use HTTPS.** It matters most for `token_header` and GitLab, where the secret itself travels in a
   header.
 - **Use strong secrets, ideally from a secrets backend,** which keeps them out of the metadata

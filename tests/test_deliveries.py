@@ -26,6 +26,16 @@ pytestmark = pytest.mark.usefixtures("clean_db")
 
 READER = object()
 NOW = datetime(2026, 10, 17, 12, tzinfo=timezone.utc)
+CONNECTION = json.dumps({"conn_type": "generic", "password": "s3cret"})
+
+
+@pytest.fixture(autouse=True)
+def webhook_connections():
+    """Readers are checked against a webhook's connection, so the webhooks read here have one."""
+    with mock.patch.dict(
+        os.environ, {"AIRFLOW_CONN_WEBHOOK_GITHUB": CONNECTION, "AIRFLOW_CONN_WEBHOOK_GITLAB": CONNECTION}
+    ):
+        yield
 
 
 @pytest.fixture
@@ -103,6 +113,31 @@ def test_access_is_checked_for_the_team_of_the_webhooks_connection(client, auth_
     assert auth_manager.is_authorized_connection.call_args.kwargs["details"].team_name == "team_a"
 
 
+def test_webhook_whose_connection_cannot_be_read_shows_nothing(client, auth_manager, add_delivery):
+    # Without the connection there is no team to check the reader against, and airflow.sdk's
+    # Connection also reports a secrets backend it could not read as a missing connection.
+    add_delivery(webhook="jira", source_type="jira")
+
+    assert client.get("/_deliveries/jira").status_code == 404
+    assert "?webhook=jira" not in client.get("/_ui/deliveries").text
+    auth_manager.is_authorized_connection.assert_not_called()
+
+
+@mock.patch.dict(
+    os.environ,
+    {"AIRFLOW_CONN_WEBHOOK_GITHUB": json.dumps({"conn_type": "generic", "extra": {"team_name": "team_a"}})},
+)
+def test_deliveries_attributed_to_another_team_are_not_shown(client, add_delivery):
+    ours = add_delivery(team_name="team_a")
+    theirs = add_delivery(team_name="team_b")
+    add_delivery(team_name=None)
+
+    listed = client.get("/_deliveries/github").json()["deliveries"]
+
+    assert [delivery["id"] for delivery in listed] == [ours]
+    assert client.get(f"/_deliveries/github/{theirs}").status_code == 404
+
+
 def test_names_no_webhook_can_have_are_not_looked_up(client, auth_manager):
     assert client.get("/_deliveries/GitHub").status_code == 404
     auth_manager.is_authorized_connection.assert_not_called()
@@ -132,6 +167,17 @@ def test_before_pages_back(client, add_delivery, before):
     assert [delivery["id"] for delivery in listed] == [older]
 
 
+def test_deliveries_received_at_the_same_time_are_paged_without_gaps(client, add_delivery):
+    ids = {add_delivery(received_at=NOW) for _ in range(3)}
+
+    first = client.get("/_deliveries/github", params={"limit": 2}).json()["deliveries"]
+    params = {"limit": 2, "before": first[-1]["received_at"], "before_id": first[-1]["id"]}
+    second = client.get("/_deliveries/github", params=params).json()["deliveries"]
+
+    assert len(first) == 2
+    assert {delivery["id"] for delivery in first + second} == ids
+
+
 def test_one_delivery_comes_with_its_payload(client, add_delivery):
     delivery = add_delivery()
 
@@ -140,6 +186,7 @@ def test_one_delivery_comes_with_its_payload(client, add_delivery):
     assert client.get(f"/_deliveries/gitlab/{delivery}").status_code == 404
 
 
+@mock.patch.dict(os.environ, {"AIRFLOW__INBOUND_WEBHOOKS__WEBHOOK_NAMES": "github,gitlab"})
 def test_page_lists_the_webhooks_the_reader_may_read(client, auth_manager, add_delivery):
     add_delivery()
     add_delivery(webhook="gitlab", source_type="gitlab")

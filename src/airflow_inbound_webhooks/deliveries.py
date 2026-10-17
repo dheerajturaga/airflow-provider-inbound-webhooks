@@ -13,7 +13,7 @@ import html
 import json
 from datetime import datetime, timezone
 from http import HTTPStatus
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 from urllib.parse import quote, urlencode
 
 from airflow.exceptions import AirflowNotFoundException
@@ -23,10 +23,13 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.security.utils import get_authorization_scheme_param
-from sqlalchemy import select
+from sqlalchemy import and_, false, or_, select
 
 from airflow_inbound_webhooks import configuration
 from airflow_inbound_webhooks.app import CONN_ID_PREFIX, WEBHOOK_NAME_PATTERN, get_webhook_names
+
+if TYPE_CHECKING:
+    from sqlalchemy import ColumnElement
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 500
@@ -61,28 +64,37 @@ ReaderDep = Annotated[Any, Depends(get_reader)]
 
 
 def get_webhook_team(name: str) -> str | None:
-    """Return the team the webhook's connection names, the team its events are attributed to."""
+    """
+    Return the team the webhook's connection names, the team its deliveries were attributed to.
+
+    A webhook whose connection cannot be read is not shown at all, rather than checked as one with no
+    team: airflow.sdk's Connection also reports a secrets backend it could not read as a missing
+    connection.
+    """
     try:
         conn = Connection.get(f"{CONN_ID_PREFIX}{name}")
     except AirflowNotFoundException:
-        return None
+        raise HTTPException(HTTPStatus.NOT_FOUND, "Unknown webhook") from None
     return conn.extra_dejson.get("team_name") or None
 
 
-def can_read(user: Any, name: str) -> bool:
+def can_read(user: Any, name: str, team: str | None) -> bool:
     """Return whether ``user`` may read the webhook's deliveries: whether they may read its connection."""
     from airflow.api_fastapi.app import get_auth_manager
     from airflow.api_fastapi.auth.managers.models.resource_details import ConnectionDetails
 
-    details = ConnectionDetails(conn_id=f"{CONN_ID_PREFIX}{name}", team_name=get_webhook_team(name))
+    details = ConnectionDetails(conn_id=f"{CONN_ID_PREFIX}{name}", team_name=team)
     return get_auth_manager().is_authorized_connection(method="GET", details=details, user=user)
 
 
-def require_read(user: Any, name: str) -> None:
+def require_read(user: Any, name: str) -> str | None:
+    """Refuse a reader who may not read the webhook's deliveries, and return the webhook's team."""
     if not WEBHOOK_NAME_PATTERN.fullmatch(name):
         raise HTTPException(HTTPStatus.NOT_FOUND, "Unknown webhook")
-    if not can_read(user, name):
+    team = get_webhook_team(name)
+    if not can_read(user, name, team):
         raise HTTPException(HTTPStatus.FORBIDDEN, "Forbidden")
+    return team
 
 
 def as_utc(moment: datetime) -> datetime:
@@ -90,42 +102,52 @@ def as_utc(moment: datetime) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
-def list_rows(name: str, limit: int, before: datetime | None) -> list[dict[str, Any]]:
-    """Return a webhook's deliveries, newest first and without their payloads."""
+def of_webhook(name: str, team: str | None) -> ColumnElement[bool]:
+    """Match a webhook's deliveries that were attributed to ``team``, the team the reader may read."""
+    from airflow_inbound_webhooks.models import delivery_table
+
+    columns = delivery_table.c
+    return and_(columns.webhook == name, columns.team_name == team if team else columns.team_name.is_(None))
+
+
+def list_rows(
+    name: str, team: str | None, limit: int, before: datetime | None = None, before_id: str | None = None
+) -> list[dict[str, Any]]:
+    """
+    Return a webhook's deliveries, newest first and without their payloads.
+
+    ``before`` and ``before_id`` page back from the last delivery of a page, so deliveries received at
+    the same time are neither skipped nor shown twice.
+    """
     from airflow.utils.session import create_session
 
     from airflow_inbound_webhooks.models import delivery_table
 
-    query = select(*(column for column in delivery_table.c if column.name != "payload")).where(
-        delivery_table.c.webhook == name
-    )
+    columns = delivery_table.c
+    query = select(*(column for column in columns if column.name != "payload")).where(of_webhook(name, team))
     if before is not None:
-        query = query.where(delivery_table.c.received_at < as_utc(before))
-    query = query.order_by(delivery_table.c.received_at.desc(), delivery_table.c.id).limit(limit)
+        before = as_utc(before)
+        query = query.where(
+            or_(
+                columns.received_at < before,
+                and_(columns.received_at == before, columns.id < before_id) if before_id else false(),
+            )
+        )
+    # Both descending, so the database can read the (webhook, received_at) index backwards.
+    query = query.order_by(columns.received_at.desc(), columns.id.desc()).limit(limit)
     with create_session(scoped=False) as session:
         return [row._asdict() for row in session.execute(query)]
 
 
-def find_row(name: str, delivery: str) -> dict[str, Any] | None:
+def find_row(name: str, team: str | None, delivery: str) -> dict[str, Any] | None:
     from airflow.utils.session import create_session
 
     from airflow_inbound_webhooks.models import delivery_table
 
-    query = select(delivery_table).where(delivery_table.c.webhook == name, delivery_table.c.id == delivery)
+    query = select(delivery_table).where(of_webhook(name, team), delivery_table.c.id == delivery)
     with create_session(scoped=False) as session:
         row = session.execute(query).one_or_none()
     return None if row is None else row._asdict()
-
-
-def get_known_webhooks() -> list[str]:
-    """Return the listed webhooks and those with stored deliveries, which can outlive their listing."""
-    from airflow.utils.session import create_session
-
-    from airflow_inbound_webhooks.models import delivery_table
-
-    with create_session(scoped=False) as session:
-        stored = set(session.scalars(select(delivery_table.c.webhook).distinct()))
-    return sorted((get_webhook_names() - {configuration.ANY_WEBHOOK_NAME}) | stored)
 
 
 router = APIRouter()
@@ -137,17 +159,18 @@ def list_deliveries(
     user: ReaderDep,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
     before: datetime | None = None,
+    before_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return a webhook's deliveries, newest first, without payloads; ``before`` pages back."""
-    require_read(user, name)
-    return {"deliveries": jsonable_encoder(list_rows(name, limit, before))}
+    """Return a webhook's deliveries, newest first, without payloads; ``before`` and ``before_id`` page back."""
+    team = require_read(user, name)
+    return {"deliveries": jsonable_encoder(list_rows(name, team, limit, before, before_id))}
 
 
 @router.get("/_deliveries/{name}/{delivery}")
 def get_delivery(name: str, delivery: str, user: ReaderDep) -> dict[str, Any]:
     """Return one delivery, with its payload."""
-    require_read(user, name)
-    if (row := find_row(name, delivery)) is None:
+    team = require_read(user, name)
+    if (row := find_row(name, team, delivery)) is None:
         raise HTTPException(HTTPStatus.NOT_FOUND, "No such delivery")
     return jsonable_encoder(row)
 
@@ -164,21 +187,37 @@ def render_page(title: str, body: str) -> HTMLResponse:
     return HTMLResponse(page, headers=PAGE_HEADERS)
 
 
+def get_readable_webhooks(user: Any) -> list[str]:
+    """Return the listed webhooks whose connections ``user`` may read."""
+    names = []
+    for name in sorted(get_webhook_names() - {configuration.ANY_WEBHOOK_NAME}):
+        try:
+            team = get_webhook_team(name)
+        except HTTPException:
+            continue
+        if can_read(user, name, team):
+            names.append(name)
+    return names
+
+
 @router.get("/_ui/deliveries", response_class=HTMLResponse)
 def deliveries_page(
-    user: ReaderDep, webhook: str | None = None, before: datetime | None = None
+    user: ReaderDep, webhook: str | None = None, before: datetime | None = None, before_id: str | None = None
 ) -> HTMLResponse:
     """List the webhooks the user may read, or one webhook's latest deliveries."""
     if webhook is None:
-        names = [name for name in get_known_webhooks() if can_read(user, name)]
+        names = get_readable_webhooks(user)
         items = "".join(
             f"<li><a href='?{escape(urlencode({'webhook': name}))}'>{escape(name)}</a></li>" for name in names
         )
-        return render_page(
-            "Webhook deliveries", f"<ul>{items}</ul>" if names else "<p>No webhooks to show.</p>"
+        # Webhooks that are no longer listed, or listed only through *, are reached by name.
+        form = (
+            "<form method='get'><label>Webhook <input name='webhook' required></label> "
+            "<button>Show deliveries</button></form>"
         )
-    require_read(user, webhook)
-    rows = list_rows(webhook, DEFAULT_LIMIT, before)
+        return render_page("Webhook deliveries", (f"<ul>{items}</ul>" if names else "") + form)
+    team = require_read(user, webhook)
+    rows = list_rows(webhook, team, DEFAULT_LIMIT, before, before_id)
     lines = "".join(
         "<tr>"
         f"<td><a href='deliveries/{escape(quote(webhook))}/{escape(quote(row['id']))}'>"
@@ -194,7 +233,10 @@ def deliveries_page(
     )
     older = ""
     if len(rows) == DEFAULT_LIMIT:
-        query = urlencode({"webhook": webhook, "before": rows[-1]["received_at"].isoformat()})
+        last = rows[-1]
+        query = urlencode(
+            {"webhook": webhook, "before": last["received_at"].isoformat(), "before_id": last["id"]}
+        )
         older = f"<p><a href='?{escape(query)}'>Older deliveries</a></p>"
     return render_page(f"Deliveries to {webhook}", (table + older) if rows else "<p>No deliveries yet.</p>")
 
@@ -202,8 +244,8 @@ def deliveries_page(
 @router.get("/_ui/deliveries/{name}/{delivery}", response_class=HTMLResponse)
 def delivery_page(name: str, delivery: str, user: ReaderDep) -> HTMLResponse:
     """Show one delivery, with the names it offered and its payload."""
-    require_read(user, name)
-    if (row := find_row(name, delivery)) is None:
+    team = require_read(user, name)
+    if (row := find_row(name, team, delivery)) is None:
         raise HTTPException(HTTPStatus.NOT_FOUND, "No such delivery")
     fields = "".join(
         f"<tr><th>{escape(key)}</th><td>{escape(row[key])}</td></tr>"

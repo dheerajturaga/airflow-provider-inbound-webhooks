@@ -86,9 +86,17 @@ root path.
 
 Plugin apps are mounted without Airflow's authorization, so these routes check the login themselves:
 Airflow's `get_user` takes a bearer token or the UI's session cookie, and the auth manager decides
-whether the user may read the webhook's connection, which holds its secret. Everything a sender
-wrote is escaped, and a Content-Security-Policy lets the page load nothing and be framed only by
-Airflow.
+whether the user may read the webhook's connection, for the team in its extra, which is the team the
+endpoint attributes the webhook's events to. Only deliveries recorded for that team are shown. When
+the connection cannot be read, which `airflow.sdk`'s `Connection` also reports for a secrets backend
+it could not reach, nothing is shown rather than checking the reader against no team. Everything a
+sender wrote is escaped, and a Content-Security-Policy lets the page load nothing and be framed
+only by Airflow.
+
+Pages go back by the last delivery's `(received_at, id)`, both descending, so deliveries received
+at the same time are neither skipped nor shown twice, and the database can read the
+`(webhook, received_at)` index backwards. The page lists only the webhooks in `webhook_names`, since
+listing those with stored deliveries would mean a `DISTINCT` over the whole table on every view.
 
 ## Airflow internals the plugin uses
 
