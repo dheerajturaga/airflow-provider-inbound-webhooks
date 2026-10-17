@@ -18,8 +18,9 @@ import pytest
 from airflow.assets.manager import AssetManager
 from airflow.models.asset import AssetDagRunQueue, AssetEvent
 from airflow.models.connection import Connection as ConnectionModel
+from airflow.models.dag import DagModel
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -598,6 +599,50 @@ def test_delivery_id_longer_than_can_be_stored_is_refused(client, session):
     assert response.status_code == 400
     assert response.json() == {"detail": "Delivery ID is longer than 255 characters"}
     assert get_deliveries(session) == []
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_delivery_only_paused_dags_subscribe_to_records_nothing(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview", paused=True)
+
+    body = post_github(client).json()
+
+    assert (body["status"], body["outcome"], body["asset_events"]) == ("no_subscribers", "dag_paused", {})
+    assert count_asset_events(session) == 0
+    assert [delivery.outcome for delivery in get_deliveries(session)] == ["dag_paused"]
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_paused_dag_does_not_hold_back_a_live_one_on_the_same_name(client, session, subscribe):
+    name = "github/my-org/web/pull_request/labeled/deploy-preview"
+    subscribe("paused_preview", name, paused=True)
+    subscribe("live_preview", name)
+
+    assert post_github(client).json()["outcome"] == "events_recorded"
+    # Airflow queues only the Dag that is not paused.
+    assert get_queued_dag_ids(session) == {"live_preview"}
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+@pytest.mark.parametrize("paused", [False, True])
+def test_stale_dag_is_no_subscriber(client, session, subscribe, paused):
+    # A stale Dag's file is gone, though its schedule can still be in the database.
+    name = "github/my-org/web/pull_request/labeled/deploy-preview"
+    subscribe("removed_preview", name, stale=True, paused=paused)
+
+    assert post_github(client).json()["outcome"] == "no_subscribers"
+    assert count_asset_events(session) == 0
+
+
+@pytest.mark.skipif(not hasattr(DagModel, "is_draining"), reason="Dags can only drain from Airflow 3.4")
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_draining_dag_is_no_live_subscriber(client, session, subscribe):
+    subscribe("draining_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    session.execute(update(DagModel).values(is_draining=True))
+    session.commit()
+
+    assert post_github(client).json()["outcome"] == "dag_paused"
+    assert count_asset_events(session) == 0
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)

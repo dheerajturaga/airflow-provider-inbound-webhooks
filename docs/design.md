@@ -21,7 +21,11 @@ documentation is in the [README](../README.md).
 6. If the delivery table already holds the delivery's ID and body digest for this webhook, and that
    delivery recorded events, it is a retry: it is answered from that row, and nothing is written. A
    delivery that recorded nothing is processed again, so a redelivery after subscribing records it.
-7. One query finds which candidates are active assets, that is, referenced by a Dag.
+7. One query finds which candidates are active assets that a Dag schedules on which is not stale,
+   paused or draining. That is the test Airflow applies before it runs an asset's watchers, plus
+   draining (Airflow 3.4 and later), which Airflow's queueing skips too. If only paused or draining
+   Dags schedule on a candidate, the outcome is `dag_paused` and nothing is recorded, so unpausing
+   never replays the delivery.
 8. `asset_manager.register_asset_change` records an asset event on each, which queues the Dags that
    schedule on it, and the delivery's row is inserted. The endpoint commits its own database session
    before responding, so `accepted` means the events and the row are stored. A copy of the delivery

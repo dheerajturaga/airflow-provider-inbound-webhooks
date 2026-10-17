@@ -52,7 +52,7 @@ from airflow.models.connection import Connection  # noqa: E402
 from airflow.models.dag import DagModel  # noqa: E402
 from airflow.models.dagbundle import DagBundleModel  # noqa: E402
 from airflow.utils.session import create_session  # noqa: E402
-from sqlalchemy import delete  # noqa: E402
+from sqlalchemy import delete, select  # noqa: E402
 
 from airflow_inbound_webhooks.models import delivery_table  # noqa: E402
 
@@ -102,19 +102,16 @@ def session():
 def subscribe(session):
     """Make a Dag schedule on an asset name, as parsing a Dag file would."""
 
-    def subscribe_dag(dag_id: str, asset_name: str) -> None:
+    def subscribe_dag(dag_id: str, asset_name: str, *, paused: bool = False, stale: bool = False) -> None:
         if session.get(DagBundleModel, "testing") is None:
             session.add(DagBundleModel(name="testing"))
             session.flush()
-        asset_model = AssetModel(name=asset_name, uri=asset_name, group="asset")
-        asset_model.scheduled_dags = [DagScheduleAssetReference(dag_id=dag_id)]
-        session.add_all(
-            [
-                DagModel(dag_id=dag_id, is_paused=False, is_stale=False, bundle_name="testing"),
-                asset_model,
-                AssetActive.for_asset(asset_model),
-            ]
-        )
+        session.add(DagModel(dag_id=dag_id, is_paused=paused, is_stale=stale, bundle_name="testing"))
+        # Several Dags can schedule on one name, which is still one asset.
+        if (asset_model := session.scalar(select(AssetModel).where(AssetModel.name == asset_name))) is None:
+            asset_model = AssetModel(name=asset_name, uri=asset_name, group="asset")
+            session.add_all([asset_model, AssetActive.for_asset(asset_model)])
+        asset_model.scheduled_dags.append(DagScheduleAssetReference(dag_id=dag_id))
         session.commit()
 
     return subscribe_dag

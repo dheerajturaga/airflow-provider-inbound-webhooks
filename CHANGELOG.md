@@ -23,6 +23,10 @@ breaking change, listed under "Changed event names" with the old and new names.
 
 ### Changed
 
+- Asset events are only recorded on names that a Dag schedules on which is not stale, paused or, on
+  Airflow 3.4 and later, draining. A delivery that only paused or draining Dags subscribe to records
+  nothing and is answered with `outcome` `dag_paused`; before, it recorded asset events that Airflow
+  queued no Dag for. Stale Dags no longer count as subscribers.
 - A delivery that cannot be recorded because the database is unavailable, or the delivery table is
   missing, is answered with `503` and `Retry-After` instead of `500`, so senders that retry try again.
   The failure is logged at most once a minute.
