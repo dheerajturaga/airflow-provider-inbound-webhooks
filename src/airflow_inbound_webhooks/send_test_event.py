@@ -41,8 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def run(args: argparse.Namespace) -> int:
+    """Send the delivery ``args`` describe, print the response, and return the exit code."""
     body = args.data.encode()
     signature = hmac.new(args.secret.encode(), body, hashlib.sha256).hexdigest()
     headers = {
@@ -60,6 +60,10 @@ def main() -> int:
         status, text = e.code, e.read().decode()
     print(f"HTTP {status}\n{text}")
     return 0 if 200 <= status < 300 else 1
+
+
+def main() -> int:
+    return run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

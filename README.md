@@ -664,6 +664,7 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
 |---|---|---|
 | `webhook_names` | empty | Comma-separated names of the webhooks to serve, such as `github,jira`. Requests for any other name are answered with `404` without looking up a connection. Empty serves no webhook, and the API server log says so once. `*` serves any name and reads its connection on every delivery, which lets anyone who can reach the endpoint make a call to your secrets backend. Changes need an API server restart. |
 | `connection_cache_ttl` | `60` | Seconds a listed webhook's connection is reused before it is read again, including a missing or misconfigured one. A rotated secret or changed option takes up to this long to apply. `0` reads the connection on every delivery. |
+| `delivery_retention_days` | `7` | Days of delivery records that `airflow webhooks clean` keeps unless told otherwise. Keep it longer than any of your services retries a delivery: a retry that comes after its first delivery's record is deleted is recorded again. |
 | `rate_limit_per_minute` | `0` | Verified deliveries each API server worker records per webhook and minute; more are answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification do not count, so they cannot use the limit up. Each worker counts on its own, so N workers record up to N times as many. GitLab disables a webhook after four failed deliveries in a row, `429` included, so set the limit above what a GitLab webhook sends. `0` turns the limit off. |
 
 ### Delivery records
@@ -681,7 +682,9 @@ Jira (`X-Atlassian-Webhook-Identifier`). `hmac_json` and `token_header` deliveri
 with an empty ID, are never taken for retries.
 
 `airflow db migrate` creates and upgrades the table, and `airflow db reset` drops it. On Airflow 3.1
-both need [`external_db_managers`](#compatibility). `airflow db clean` does not remove its rows.
+both need [`external_db_managers`](#compatibility). `airflow db clean` does not remove its rows:
+`airflow webhooks clean` deletes those older than `delivery_retention_days`, so run it on a
+schedule, as you would `airflow db clean`.
 
 ### Reading deliveries
 
@@ -707,6 +710,18 @@ not a public interface yet, and can change in any release.
 
 `GET /webhooks/_health` answers `200` without a login, for load balancers and probes.
 
+### Command line
+
+`airflow webhooks` has four commands. On Airflow 3.1, which does not add a provider's commands to
+`airflow`, run them as `python -m airflow_inbound_webhooks.cli <command>`.
+
+| Command | Does |
+|---|---|
+| `airflow webhooks check <name>` | Reports how deliveries to a webhook would be served: whether `webhook_names` lists it, whether its connection is valid, and whether the delivery table is ready. Exits with `1` if deliveries would fail |
+| `airflow webhooks deliveries <name>` | Shows the latest deliveries (`--limit`, `--output`), or with `--id` one delivery as JSON, with its payload |
+| `airflow webhooks clean` | Deletes delivery records older than `delivery_retention_days`, or `--older-than` days, after asking (`--yes` skips the question, `--dry-run` only counts) |
+| `airflow webhooks send-test` | Sends a signed test delivery, as `python -m airflow_inbound_webhooks.send_test_event` does |
+
 ### Audit log and metrics
 
 A delivery that records asset events writes an entry to Airflow's audit log, in the same
@@ -726,7 +741,8 @@ The endpoint sends these metrics through Airflow's metrics configuration, each t
 
 ### Responses and troubleshooting
 
-A `202` answer has these fields:
+`airflow webhooks check <name>` reports what would happen to a webhook's deliveries, and why they
+would fail. A `202` answer has these fields:
 
 | Field | Meaning |
 |---|---|
@@ -828,7 +844,7 @@ response's `detail` or in the API server log, nor the deliveries page and API.
 - No replay protection: retries are recognised by their delivery ID, deliberate replays are not.
 - Each recorded asset event stores the delivery's payload, unless `store_payload` says otherwise,
   and anyone who can read asset events can see it.
-- Delivery records are kept until you delete them from `inbound_webhooks_delivery`.
+- Delivery records are only deleted by `airflow webhooks clean`, which needs to be scheduled.
 - Renaming a repository, project or service changes its event names, so Dags must be updated.
 - The plugin uses some Airflow internals (`asset_manager`, `AssetModel`, `create_session`,
   `BaseDBManager`), which CI checks against every supported version.

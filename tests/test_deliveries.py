@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import uuid
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
@@ -20,7 +19,6 @@ from fastapi.testclient import TestClient
 
 from airflow_inbound_webhooks import deliveries
 from airflow_inbound_webhooks.app import build_app
-from airflow_inbound_webhooks.models import delivery_table
 
 pytestmark = pytest.mark.usefixtures("clean_db")
 
@@ -52,33 +50,6 @@ def client(auth_manager):
     webhooks = build_app()
     webhooks.dependency_overrides[deliveries.get_reader] = lambda: READER
     return TestClient(webhooks)
-
-
-@pytest.fixture
-def add_delivery(session):
-    def add(**values) -> str:
-        row = {
-            "id": str(uuid.uuid4()),
-            "webhook": "github",
-            # Unique per webhook, like a sender's.
-            "delivery_id": str(uuid.uuid4()),
-            "body_digest": "0" * 64,
-            "received_at": NOW,
-            "source_type": "github",
-            "path": "my-org/web",
-            "candidates": ["github/my-org/web/push"],
-            "asset_events": {"github/my-org/web/push": 1},
-            "correlation_key": None,
-            "outcome": "events_recorded",
-            "team_name": None,
-            "payload": {"ref": "refs/heads/main"},
-            **values,
-        }
-        session.execute(delivery_table.insert().values(**row))
-        session.commit()
-        return row["id"]
-
-    return add
 
 
 def test_health_needs_no_login():
