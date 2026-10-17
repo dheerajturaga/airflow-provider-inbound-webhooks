@@ -22,10 +22,22 @@ from airflow_inbound_webhooks import configuration
 
 # Rows deleted per transaction, so cleaning a large table holds no long lock and keeps its progress.
 CLEAN_BATCH_SIZE = 1000
+# As for the deliveries API: SQLite takes a negative limit as none, PostgreSQL and MySQL refuse it.
+MAX_LIMIT = 500
+
+
+def read_limit(value: str) -> int:
+    if not (value.isdigit() and 1 <= int(value) <= MAX_LIMIT):
+        raise argparse.ArgumentTypeError(f"must be a number from 1 to {MAX_LIMIT}")
+    return int(value)
+
 
 ARG_NAME = Arg(("name",), help="The webhook's name, as in /webhooks/<name>")
 ARG_LIMIT = Arg(
-    ("--limit",), type=int, default=20, help="How many of the latest deliveries to show (default 20)"
+    ("--limit",),
+    type=read_limit,
+    default=20,
+    help=f"How many of the latest deliveries to show, 1 to {MAX_LIMIT} (default 20)",
 )
 ARG_DELIVERY = Arg(("--id",), dest="delivery", help="Show this delivery as JSON, with its payload")
 ARG_OLDER_THAN = Arg(
@@ -192,9 +204,14 @@ def clean(args: argparse.Namespace) -> None:
     if args.dry_run or not count:
         print(f"{count} deliveries were received before {cutoff.isoformat()}; none deleted")
         return
-    prompt = f"Delete {count} deliveries received before {cutoff.isoformat()}? [y/N] "
-    if not args.yes and input(prompt).strip().lower() not in ("y", "yes"):
-        sys.exit("Nothing deleted")
+    if not args.yes:
+        try:
+            answer = input(f"Delete {count} deliveries received before {cutoff.isoformat()}? [y/N] ")
+        except EOFError:
+            # No terminal to ask, as when it runs on a schedule.
+            sys.exit("Nothing deleted: pass --yes to delete without being asked")
+        if answer.strip().lower() not in ("y", "yes"):
+            sys.exit("Nothing deleted")
     deleted = 0
     while True:
         with create_session(scoped=False) as session:

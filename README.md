@@ -718,8 +718,8 @@ not a public interface yet, and can change in any release.
 | Command | Does |
 |---|---|
 | `airflow webhooks check <name>` | Reports how deliveries to a webhook would be served: whether `webhook_names` lists it, whether its connection is valid, and whether the delivery table is ready. Exits with `1` if deliveries would fail |
-| `airflow webhooks deliveries <name>` | Shows the latest deliveries (`--limit`, `--output`), or with `--id` one delivery as JSON, with its payload |
-| `airflow webhooks clean` | Deletes delivery records older than `delivery_retention_days`, or `--older-than` days, after asking (`--yes` skips the question, `--dry-run` only counts) |
+| `airflow webhooks deliveries <name>` | Shows the latest deliveries of every team (`--limit`, 1 to 500, and `--output`), or with `--id` one delivery as JSON, with its payload |
+| `airflow webhooks clean` | Deletes delivery records older than `delivery_retention_days`, or `--older-than` days, after asking. `--yes` skips the question, which a schedule needs; `--dry-run` only counts |
 | `airflow webhooks send-test` | Sends a signed test delivery, as `python -m airflow_inbound_webhooks.send_test_event` does |
 
 ### Audit log and metrics

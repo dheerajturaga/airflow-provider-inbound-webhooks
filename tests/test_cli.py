@@ -142,6 +142,26 @@ def test_clean_asks_before_deleting(session, old_and_new_deliveries):
     assert get_delivery_ids(session) == set(old_and_new_deliveries)
 
 
+def test_clean_without_a_terminal_to_ask_deletes_nothing(session, old_and_new_deliveries):
+    # As from a schedule, without --yes.
+    with (
+        mock.patch("builtins.input", side_effect=EOFError),
+        pytest.raises(SystemExit, match="pass --yes"),
+    ):
+        cli.main(["clean", "--older-than", "7"])
+
+    assert get_delivery_ids(session) == set(old_and_new_deliveries)
+
+
+@pytest.mark.parametrize("limit", ["0", "-1", "501", "ten"])
+def test_deliveries_limit_is_bounded(limit, capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["deliveries", "github", "--limit", limit])
+
+    assert exit_info.value.code == 2
+    assert "must be a number from 1 to 500" in capsys.readouterr().err
+
+
 def test_clean_deletes_in_batches(session, add_delivery):
     long_ago = datetime.now(tz=timezone.utc) - timedelta(days=30)
     for _ in range(5):
