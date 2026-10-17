@@ -564,8 +564,8 @@ from Jira, which also gives its current state, or the connection can store the w
 
 Jira sends `issue_updated` for every edit, so select only the events your Dags need and narrow the
 webhook with a JQL filter such as `project = OPS`. Jira Cloud retries a delivery that fails or times
-out, so a Dag may occasionally see one twice. Its `delivery_id`, Jira Cloud's
-`X-Atlassian-Webhook-Identifier`, stays the same across retries.
+out. Its `delivery_id`, Jira Cloud's `X-Atlassian-Webhook-Identifier`, stays the same across
+retries, so a retry is recognised and records nothing.
 
 On a Jira without webhook secrets, an Automation for Jira rule with a "Send web request" action can
 send the secret in a header for `token_header` instead.
