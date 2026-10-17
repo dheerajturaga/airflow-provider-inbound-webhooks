@@ -624,6 +624,28 @@ def test_paused_dag_does_not_hold_back_a_live_one_on_the_same_name(client, sessi
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
+@pytest.mark.parametrize("ref", ["name", "uri"])
+def test_dag_scheduled_through_an_asset_ref_is_a_subscriber(client, session, subscribe, ref):
+    name = "github/my-org/web/pull_request/labeled/deploy-preview"
+    # A Dag that schedules on the asset directly keeps it active; this one is paused.
+    subscribe("paused_preview", name, paused=True)
+    subscribe("ref_preview", name, ref=ref)
+
+    assert post_github(client).json()["outcome"] == "events_recorded"
+    # Airflow queues a Dag scheduled through Asset.ref(name=...) or Asset.ref(uri=...) too.
+    assert get_queued_dag_ids(session) == {"ref_preview"}
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_paused_dag_scheduled_through_an_asset_ref_makes_the_delivery_dag_paused(client, subscribe):
+    name = "github/my-org/web/pull_request/labeled/deploy-preview"
+    subscribe("removed_preview", name, stale=True)
+    subscribe("paused_ref_preview", name, paused=True, ref="name")
+
+    assert post_github(client).json()["outcome"] == "dag_paused"
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
 @pytest.mark.parametrize("paused", [False, True])
 def test_stale_dag_is_no_subscriber(client, session, subscribe, paused):
     # A stale Dag's file is gone, though its schedule can still be in the database.

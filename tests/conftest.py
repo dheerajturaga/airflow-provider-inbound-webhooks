@@ -46,7 +46,9 @@ from airflow.models.asset import (  # noqa: E402
     AssetDagRunQueue,
     AssetEvent,
     AssetModel,
+    DagScheduleAssetNameReference,
     DagScheduleAssetReference,
+    DagScheduleAssetUriReference,
 )
 from airflow.models.connection import Connection  # noqa: E402
 from airflow.models.dag import DagModel  # noqa: E402
@@ -62,6 +64,8 @@ CLEARED_MODELS = (
     AssetDagRunQueue,
     AssetEvent,
     DagScheduleAssetReference,
+    DagScheduleAssetNameReference,
+    DagScheduleAssetUriReference,
     AssetActive,
     AssetModel,
     DagModel,
@@ -102,7 +106,10 @@ def session():
 def subscribe(session):
     """Make a Dag schedule on an asset name, as parsing a Dag file would."""
 
-    def subscribe_dag(dag_id: str, asset_name: str, *, paused: bool = False, stale: bool = False) -> None:
+    def subscribe_dag(
+        dag_id: str, asset_name: str, *, paused: bool = False, stale: bool = False, ref: str | None = None
+    ) -> None:
+        """With ``ref`` "name" or "uri", schedule as ``Asset.ref(name=...)`` or ``Asset.ref(uri=...)``."""
         if session.get(DagBundleModel, "testing") is None:
             session.add(DagBundleModel(name="testing"))
             session.flush()
@@ -111,7 +118,12 @@ def subscribe(session):
         if (asset_model := session.scalar(select(AssetModel).where(AssetModel.name == asset_name))) is None:
             asset_model = AssetModel(name=asset_name, uri=asset_name, group="asset")
             session.add_all([asset_model, AssetActive.for_asset(asset_model)])
-        asset_model.scheduled_dags.append(DagScheduleAssetReference(dag_id=dag_id))
+        if ref == "name":
+            session.add(DagScheduleAssetNameReference(name=asset_name, dag_id=dag_id))
+        elif ref == "uri":
+            session.add(DagScheduleAssetUriReference(uri=asset_name, dag_id=dag_id))
+        else:
+            asset_model.scheduled_dags.append(DagScheduleAssetReference(dag_id=dag_id))
         session.commit()
 
     return subscribe_dag

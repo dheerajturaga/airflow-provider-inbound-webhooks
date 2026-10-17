@@ -22,7 +22,8 @@ documentation is in the [README](../README.md).
    delivery recorded events, it is a retry: it is answered from that row, and nothing is written. A
    delivery that recorded nothing is processed again, so a redelivery after subscribing records it.
 7. One query finds which candidates are active assets that a Dag schedules on which is not stale,
-   paused or draining. That is the test Airflow applies before it runs an asset's watchers, plus
+   paused or draining, directly or through `Asset.ref(name=...)` or `Asset.ref(uri=...)`, which
+   Airflow queues too. That is the test Airflow applies before it runs an asset's watchers, plus
    draining (Airflow 3.4 and later), which Airflow's queueing skips too. If only paused or draining
    Dags schedule on a candidate, the outcome is `dag_paused` and nothing is recorded, so unpausing
    never replays the delivery.
@@ -81,6 +82,7 @@ change to the table needs a model change and a migration that agree.
 |---|---|---|
 | `airflow.assets.manager.asset_manager.register_asset_change` | Records the asset event and queues Dags exactly as Airflow does | Its signature changed in 3.2 and 3.3, and it accepts and drops unknown keyword arguments, so a renamed argument would be lost silently. The endpoint inspects `AssetManager.register_asset_change`: deliveries fail with a `500` if `asset`, `extra` or `session` is no longer a named parameter, and `source_is_api` and `api_user_teams` are passed only where they are (3.3 and later). A deployment can replace the manager with `[core] asset_manager_class`; the check reads Airflow's own class, so a replacement that forwards `**kwargs` still works. |
 | `airflow.models.asset.AssetModel` | Finds which candidate names are active assets | Database models are internal; a relationship was renamed in 3.1 |
+| `DagModel`, `DagScheduleAssetReference`, `DagScheduleAssetNameReference` and `DagScheduleAssetUriReference` | Find the Dags that schedule on a candidate, and whether they are stale, paused or draining | Internal. `DagModel.is_draining` only exists from 3.4, so the query uses it only where it exists |
 | `airflow.utils.session.create_session` | A database session the endpoint commits before it responds | Same signature in every supported version. It is what the API server's own `SessionDep` wraps; `SessionDep` is marked private and commits in dependency cleanup, whose timing depends on FastAPI (Airflow pins it with `scope="function"` from 3.2). |
 | `airflow.utils.db_manager.BaseDBManager` | Creates and migrates the delivery table as part of `airflow db migrate` | Internal, and its behaviour differs by version: on an existing Airflow installation, 3.1 runs the migrations, and otherwise the table is created from the metadata. The manager overrides none of its methods, and `tests/test_db.py` checks that both ways give the same schema |
 | `airflow.models.base` (`_get_schema`, `naming_convention`) and `airflow.utils.sqlalchemy.UtcDateTime` | Give the table Airflow's schema setting, constraint names and timestamp type | Internal; the same in every supported version |

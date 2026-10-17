@@ -22,7 +22,7 @@ from airflow.configuration import conf
 from airflow.exceptions import AirflowNotFoundException
 from airflow.sdk import Connection
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
-from sqlalchemy import select, update
+from sqlalchemy import exists, or_, select, update
 from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError, ProgrammingError
 
 from airflow_inbound_webhooks import configuration
@@ -331,10 +331,17 @@ def find_subscribed_assets(session: Session, candidates: list[str]) -> tuple[lis
     Return the candidates a Dag that is not stale, paused or draining schedules on.
 
     That is the test Airflow applies before it runs an asset's watchers, plus draining, which Airflow's
-    queueing also skips, so an event is never recorded on a name no Dag would run for. When there are
-    none, the second value says whether a paused or draining Dag schedules on a candidate.
+    queueing also skips, so an event is never recorded on a name no Dag would run for. A Dag schedules
+    on an asset directly, or through ``Asset.ref(name=...)`` or ``Asset.ref(uri=...)``, which Airflow
+    queues too. When there are none, the second value says whether a paused or draining Dag schedules
+    on a candidate.
     """
-    from airflow.models.asset import AssetModel, DagScheduleAssetReference
+    from airflow.models.asset import (
+        AssetModel,
+        DagScheduleAssetNameReference,
+        DagScheduleAssetReference,
+        DagScheduleAssetUriReference,
+    )
     from airflow.models.dag import DagModel
 
     not_stale = ~DagModel.is_stale
@@ -347,7 +354,17 @@ def find_subscribed_assets(session: Session, candidates: list[str]) -> tuple[lis
         return select(AssetModel).where(
             AssetModel.name.in_(candidates),
             AssetModel.active.has(),
-            AssetModel.scheduled_dags.any(DagScheduleAssetReference.dag.has(condition)),
+            or_(
+                AssetModel.scheduled_dags.any(DagScheduleAssetReference.dag.has(condition)),
+                exists().where(
+                    DagScheduleAssetNameReference.name == AssetModel.name,
+                    DagScheduleAssetNameReference.dag.has(condition),
+                ),
+                exists().where(
+                    DagScheduleAssetUriReference.uri == AssetModel.uri,
+                    DagScheduleAssetUriReference.dag.has(condition),
+                ),
+            ),
         )
 
     if subscribed := list(session.scalars(scheduled_by(live))):
