@@ -132,9 +132,15 @@ def resolve_webhook(name: str) -> ConfiguredWebhook:
         if store_payload not in STORED_PAYLOADS:
             raise ValueError(f"store_payload must be one of {STORED_PAYLOADS}")
         if store_payload == "summary" and not source_class.has_summary:
-            raise ValueError(
-                f"source_type {source_type} has no summary, so store_payload must be full or none"
+            # 0.1.0's connection form offered summary for every source type, and only jira used it, so
+            # existing connections can set it: they keep the whole payload, as they did then.
+            log.warning(
+                "Webhook connection %s sets store_payload to summary, which source_type %s does not have; "
+                "it stores the whole payload",
+                conn_id,
+                source_type,
             )
+            store_payload = "full"
         if not conn.password:
             raise ValueError("the password, which holds the shared secret, is empty")
         if extra.get("team_name") and not supports_team_attribution():

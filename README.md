@@ -649,7 +649,7 @@ work too. Fields left empty are treated as unset.
 | Source type | `source_type` | Source type; defaults to `<name>` |
 | Team | `team_name` | With multi-team Airflow (3.3 or later), events count as coming from this team, which decides which teams' Dags are queued. Without it, they only reach teamless Dags. Rejected on older Airflow. |
 | Maximum body size | `max_body_bytes` | Larger requests are refused before verification. Default 1 MiB. |
-| Stored payload | `store_payload` | What asset events and the delivery record keep of each delivery: `full`, the body as received; `summary`, which only `jira` has; or `none`. Defaults to `summary` for `jira` and `full` otherwise. |
+| Stored payload | `store_payload` | What asset events and the delivery record keep of each delivery: `full`, the body as received; `summary`, which only `jira` has, and which keeps the whole payload on any other source type, as it did before 0.2; or `none`. Defaults to `summary` for `jira` and `full` otherwise. |
 | Other fields | | Options of the source type, listed above |
 
 Connections stored in Airflow's metadata database, in environment variables

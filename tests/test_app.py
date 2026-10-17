@@ -313,6 +313,17 @@ def test_stored_payload_follows_the_connection(client, session, subscribe, conn_
     assert [delivery.payload for delivery in get_deliveries(session)] == [expected_payload]
 
 
+@mock.patch.dict(os.environ, build_conn_env("github", store_payload="summary"))
+def test_summary_on_a_source_type_without_one_keeps_the_whole_payload(client, session, subscribe, caplog):
+    # 0.1.0's form offered summary for every source type, and only jira used it.
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    assert post_github(client).status_code == 202
+
+    assert session.scalars(select(AssetEvent.extra)).one()["payload"] == LABELED
+    assert any("store_payload to summary" in record.getMessage() for record in caplog.records)
+
+
 @mock.patch.dict(os.environ, build_conn_env("jira", store_payload="full"))
 def test_jira_stores_the_whole_issue_when_asked(client, session, subscribe):
     subscribe("new_bugs", "jira/OPS/issue_created")
@@ -467,14 +478,6 @@ def test_rejected_delivery(client, session, subscribe, delivery, expected_status
                 "extra": {"source_type": "github", "store_payload": "everything"},
             },
             id="unknown-store-payload",
-        ),
-        pytest.param(
-            {
-                "conn_type": "generic",
-                "password": SECRET,
-                "extra": {"source_type": "github", "store_payload": "summary"},
-            },
-            id="no-summary-to-store",
         ),
     ],
 )
