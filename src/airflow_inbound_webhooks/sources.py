@@ -213,7 +213,9 @@ class GitLabSource(WebhookSource):
         return WebhookEvent(
             path=get_text(payload, "project.path_with_namespace"),
             kinds=[kind, *((event, "labeled", label) for label in added)],
-            delivery_id=headers.get("X-Gitlab-Event-UUID"),
+            # GitLab 17.4 and later keep Idempotency-Key across retries and resends. Not
+            # X-Gitlab-Event-UUID: webhooks triggered by earlier webhooks share it.
+            delivery_id=headers.get("Idempotency-Key"),
             payload=payload,
         )
 

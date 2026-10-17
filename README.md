@@ -65,13 +65,16 @@ service's signature and records the delivery as an asset event.
 Try it with the bundled test sender, so no third-party account is needed. Run these commands on the
 machine running the Airflow API server (Airflow 3.1.1 or later).
 
-1. **Install the plugin:**
+1. **Install the plugin** and create its table in Airflow's metadata database:
 
    ```bash
    pip install airflow-provider-inbound-webhooks "apache-airflow==$(airflow version)"
+   airflow db migrate
    ```
 
-   Pinning `apache-airflow` to the version you run keeps pip from changing it.
+   Pinning `apache-airflow` to the version you run keeps pip from changing it. On Airflow 3.1,
+   `airflow db migrate` only creates the table once `external_db_managers` names the plugin; see
+   [Compatibility](#compatibility).
 
 2. **Enable the webhook name** `demo`, then restart the API server. The plugin serves only the names
    listed in [`webhook_names`](#configuration), so add this to `airflow.cfg` in your Airflow home:
@@ -438,7 +441,8 @@ Deeper paths work the same way. For a GitLab project `platform/backend/api`,
 
 **Finding a name:** every response lists the names it offered as `candidates`, so send the event
 once and copy one. A delivery that matches no subscribed name is answered with
-`202 no_subscribers` and nothing is stored.
+`202 no_subscribers` and records no asset event; its [delivery record](#delivery-records) keeps its
+names, without the payload.
 
 Non-ASCII characters are folded (`🚀 deploy` → `deploy`) on every database, because MySQL stores
 asset names as latin1 and fails any lookup that includes a non-ASCII name. Parts that end up empty
@@ -560,8 +564,8 @@ from Jira, which also gives its current state, or the connection can store the w
 
 Jira sends `issue_updated` for every edit, so select only the events your Dags need and narrow the
 webhook with a JQL filter such as `project = OPS`. Jira Cloud retries a delivery that fails or times
-out, so a Dag may occasionally see one twice. Its `delivery_id`, Jira Cloud's
-`X-Atlassian-Webhook-Identifier`, stays the same across retries.
+out. Its `delivery_id`, Jira Cloud's `X-Atlassian-Webhook-Identifier`, stays the same across
+retries, so a retry is recognised and records nothing.
 
 On a Jira without webhook secrets, an Automation for Jira rule with a "Send web request" action can
 send the secret in a header for `token_header` instead.
@@ -641,13 +645,30 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
 | `webhook_names` | empty | Comma-separated names of the webhooks to serve, such as `github,jira`. Requests for any other name are answered with `404` without looking up a connection. Empty serves no webhook, and the API server log says so once. `*` serves any name and reads its connection on every delivery, which lets anyone who can reach the endpoint make a call to your secrets backend. Changes need an API server restart. |
 | `connection_cache_ttl` | `60` | Seconds a listed webhook's connection is reused before it is read again, including a missing or misconfigured one. A rotated secret or changed option takes up to this long to apply. `0` reads the connection on every delivery. |
 
+### Delivery records
+
+Every verified delivery is stored in the table `inbound_webhooks_delivery` of Airflow's metadata
+database, in the transaction that records its asset events. The table records the webhook, the
+sender's delivery ID, when the delivery arrived, the names it offered and the asset events it
+recorded, plus its payload when it recorded any.
+
+A retry repeats a delivery's ID and its body. It gets the answer the delivery got, and records
+nothing. A redelivery of a delivery that recorded nothing is processed again, so redelivering an
+event after subscribing to one of its names records it. Only senders that send a delivery ID can be
+recognised this way: GitHub (`X-GitHub-Delivery`), GitLab 17.4 and later (`Idempotency-Key`) and
+Jira (`X-Atlassian-Webhook-Identifier`). `hmac_json` and `token_header` deliveries, and deliveries
+with an empty ID, are never taken for retries.
+
+`airflow db migrate` creates and upgrades the table, and `airflow db reset` drops it. On Airflow 3.1
+both need [`external_db_managers`](#compatibility). `airflow db clean` does not remove its rows.
+
 ### Responses and troubleshooting
 
 | Status | Meaning | What to check |
 |---|---|---|
-| `202` `accepted` | Recorded; `asset_events` lists the asset event per subscribed name | If no Dag run starts, the Dag is paused |
-| `202` `no_subscribers` | Verified, but no Dag schedules on any of the `candidates`; nothing stored | The Dag schedules on one of the `candidates` and has been parsed: `airflow dags reserialize` parses it now. The API server logs the `candidates` at debug level |
-| `400` | The body is not a JSON object, or the event name is missing | GitHub: the content type is `application/json`. Jira: *Exclude body* is unchecked |
+| `202` `accepted` | Recorded; `asset_events` lists the asset event per subscribed name. A retry gets the same answer and records nothing | If no Dag run starts, the Dag is paused |
+| `202` `no_subscribers` | Verified, but no Dag schedules on any of the `candidates`, so no asset event is recorded | The Dag schedules on one of the `candidates` and has been parsed: `airflow dags reserialize` parses it now. The API server logs the `candidates` at debug level |
+| `400` | The body is not a JSON object, the event name is missing, or the delivery ID is longer than 255 characters | GitHub: the content type is `application/json`. Jira: *Exclude body* is unchecked |
 | `401` | Signature or token does not match | The secret in the service equals the connection's password |
 | `404` | No such webhook: the name is not in `webhook_names`, or has no `webhook_<name>` connection | The name is in `webhook_names` and the API server was restarted after it changed; the connection ID is `webhook_` plus the name in the URL |
 | `405` | The plugin is not loaded, so Airflow's UI answers | Restart the API server after installing; `airflow plugins` lists `webhooks` |
@@ -676,11 +697,15 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
   delivery's payload, and the Airflow UI and REST API show it to every user allowed to read assets,
   not only to the Dags that subscribe. GitHub push payloads, for example, include each commit
   author's name and email address. `jira` stores only a summary of the issue by default.
-- **No replay protection yet.** A captured delivery can be sent again, also with headers its
-  signature does not cover changed. Where the event name comes from such a header, as GitHub's
-  `X-GitHub-Event` or an `event_header` does, a replayed body can be given another event's name.
-  Signatures over a timestamp would allow rejecting old deliveries; see
-  [docs/design.md](docs/design.md).
+- **Retries are recognised, replays are not.** A delivery sent again with the same delivery ID is
+  answered as before and records nothing, which covers a service's own retries. A captured delivery
+  sent again with another ID is recorded as new: GitHub's delivery ID is a header its signature
+  does not cover, and GitLab sends a token rather than a signature. Because a retry must repeat the
+  body too, a captured body sent under another delivery's ID cannot take that delivery's place.
+  Other headers outside the signature can be changed too.
+  Where the event name comes from such a header, as GitHub's `X-GitHub-Event` or an `event_header`
+  does, a replayed body can be given another event's name. Signatures over a timestamp would allow
+  rejecting old deliveries; see [docs/design.md](docs/design.md).
 - Bodies larger than `max_body_bytes` are refused before verification.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
@@ -690,7 +715,8 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 | Airflow | Support |
 |---|---|
 | 3.3 and later | Supported, including `team_name` |
-| 3.1.1 to 3.2 | Supported; `team_name` is rejected because these versions cannot attribute asset events to a team. On 3.1.1 and 3.1.2 the connection form only shows its fields when Flask-AppBuilder is installed (for example with the FAB provider); otherwise set the fields as JSON in the connection's extra. On later 3.1 patches with Python 3.10, fields with a fixed set of values, such as *Source type*, show as text boxes unless Flask-AppBuilder is installed; their descriptions list the values |
+| 3.2 | Supported; `team_name` is rejected because this version cannot attribute asset events to a team |
+| 3.1.1 to 3.1.x | Supported, without `team_name`, as on 3.2. `airflow db migrate` only runs the DB managers `[database] external_db_managers` names, so add the plugin's before creating or upgrading its table: `external_db_managers = airflow_inbound_webhooks.db.WebhooksDBManager`, or `AIRFLOW__DATABASE__EXTERNAL_DB_MANAGERS` in the environment. Separate several managers with commas and no spaces, which 3.1 does not strip. On 3.1.1 and 3.1.2 the connection form only shows its fields when Flask-AppBuilder is installed (for example with the FAB provider); otherwise set the fields as JSON in the connection's extra. On later 3.1 patches with Python 3.10, fields with a fixed set of values, such as *Source type*, show as text boxes unless Flask-AppBuilder is installed; their descriptions list the values |
 | 3.0, 3.1.0 | Not supported: their API server cannot read metadata-database connections through `airflow.sdk.Connection`, and installing next to them is refused |
 | 2.x | Not supported: there is no FastAPI API server for the plugin to mount on |
 
@@ -718,14 +744,15 @@ response's `detail` or in the API server log.
 
 ## Limitations
 
-- No replay protection.
+- No replay protection: retries are recognised by their delivery ID, deliberate replays are not.
 - Each recorded asset event stores the full delivery payload, except that `jira` stores a summary
   by default, and anyone who can read asset events can see it.
 - Asset events from webhooks are not written to Airflow's audit log, because a delivery has no
   Airflow user.
+- Delivery records are kept until you delete them from `inbound_webhooks_delivery`.
 - Renaming a repository, project or service changes its event names, so Dags must be updated.
-- The plugin uses some Airflow internals (`asset_manager`, `AssetModel`, `create_session`), which CI
-  checks against every supported version.
+- The plugin uses some Airflow internals (`asset_manager`, `AssetModel`, `create_session`,
+  `BaseDBManager`), which CI checks against every supported version.
 
 [docs/design.md](docs/design.md) covers the design, these limitations and the path towards Airflow
 core.

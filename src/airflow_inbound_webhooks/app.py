@@ -5,30 +5,42 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import inspect
 import logging
 import re
 import threading
 import time
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from http import HTTPStatus
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from airflow.configuration import conf
 from airflow.exceptions import AirflowNotFoundException
 from airflow.sdk import Connection
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from airflow_inbound_webhooks import configuration
 from airflow_inbound_webhooks.naming import build_candidate_names
 from airflow_inbound_webhooks.sources import SOURCE_TYPES, WebhookSource, WebhookVerificationError
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import CursorResult, Row
+    from sqlalchemy.orm import Session
 
 log = logging.getLogger(__name__)
 
 CONN_ID_PREFIX = "webhook_"
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024
 WEBHOOK_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+# The lengths of the delivery table's delivery_id, path and team_name columns.
+MAX_DELIVERY_ID_LENGTH = 255
+MAX_PATH_LENGTH = 1500
+MAX_TEAM_NAME_LENGTH = 50
 # register_asset_change accepts and drops unknown keyword arguments, so an argument a later Airflow
 # renamed would be lost silently instead of failing. The team arguments only exist from Airflow 3.3.
 REQUIRED_ASSET_CHANGE_ARGUMENTS = frozenset({"asset", "extra", "session"})
@@ -63,6 +75,7 @@ class ConfiguredWebhook:
     """A webhook resolved from its ``webhook_<name>`` connection, the only configuration it has."""
 
     name: str
+    source_type: str
     source: WebhookSource
     secret: str
     team_name: str | None
@@ -96,11 +109,14 @@ def resolve_webhook(name: str) -> ConfiguredWebhook:
             raise ValueError("the password, which holds the shared secret, is empty")
         if extra.get("team_name") and not supports_team_attribution():
             raise ValueError("team_name needs Airflow 3.3 or later to attribute events to a team")
+        if len(extra.get("team_name") or "") > MAX_TEAM_NAME_LENGTH:
+            raise ValueError(f"team_name is longer than Airflow's {MAX_TEAM_NAME_LENGTH} characters")
         # The connection form enforces this, but connections from JSON or environment variables skip it.
         if (max_body_bytes := int(extra.get("max_body_bytes", DEFAULT_MAX_BODY_BYTES))) < 1:
             raise ValueError("max_body_bytes must be at least 1")
         return ConfiguredWebhook(
             name=name,
+            source_type=source_type,
             source=SOURCE_TYPES[source_type].from_extra(extra),
             secret=conn.password,
             team_name=extra.get("team_name"),
@@ -198,6 +214,41 @@ async def read_limited_body(request: Request, webhook: WebhookDep) -> bytes:
     return bytes(body)
 
 
+class RecordedMeanwhile(Exception):
+    """Another copy of a redelivered delivery recorded its events first."""
+
+
+def find_delivery(
+    session: Session, webhook_name: str, delivery_id: str | None, body_digest: str
+) -> Row[Any] | None:
+    """
+    Return the stored delivery that a sender's delivery repeats, if any.
+
+    A repeat has the delivery's ID and its body: the ID is a header no signature covers, so a captured
+    body sent again under a delivery ID it never had is not taken for that delivery.
+    """
+    from airflow_inbound_webhooks.models import delivery_table
+
+    if delivery_id is None:
+        return None
+    columns = delivery_table.c
+    return session.execute(
+        select(columns.id, columns.outcome, columns.asset_events, columns.candidates).where(
+            columns.webhook == webhook_name,
+            columns.delivery_id == delivery_id,
+            columns.body_digest == body_digest,
+        )
+    ).one_or_none()
+
+
+def build_response(asset_events: dict[str, int], candidates: list[str]) -> dict[str, Any]:
+    return {
+        "status": "accepted" if asset_events else "no_subscribers",
+        "asset_events": asset_events,
+        "candidates": candidates,
+    }
+
+
 router = APIRouter()
 
 
@@ -216,6 +267,8 @@ def receive_webhook(
     from airflow.models.asset import AssetModel
     from airflow.utils.session import create_session
 
+    from airflow_inbound_webhooks.models import EVENTS_RECORDED, NO_SUBSCRIBERS, delivery_table
+
     try:
         webhook.source.verify(request.headers, body, webhook.secret)
     except WebhookVerificationError as e:
@@ -225,12 +278,19 @@ def receive_webhook(
         event = webhook.source.parse(request.headers, body)
     except ValueError as e:
         raise HTTPException(HTTPStatus.BAD_REQUEST, str(e)) from e
+    # An empty header is no delivery ID; it would make every later delivery without one a retry.
+    delivery_id = event.delivery_id or None
+    if delivery_id is not None and len(delivery_id) > MAX_DELIVERY_ID_LENGTH:
+        raise HTTPException(
+            HTTPStatus.BAD_REQUEST, f"Delivery ID is longer than {MAX_DELIVERY_ID_LENGTH} characters"
+        )
+    body_digest = hashlib.sha256(body).hexdigest()
 
     candidates = build_candidate_names(webhook.name, event)
     extra = {
         "source": webhook.name,
         "path": event.path,
-        "delivery_id": event.delivery_id,
+        "delivery_id": delivery_id,
         "payload": event.payload,
     }
     team_arguments: dict[str, Any] = (
@@ -239,25 +299,70 @@ def receive_webhook(
         else {}
     )
     asset_events: dict[str, int] = {}
-    # Leaving the block commits, so a delivery is only acknowledged once its events are stored.
-    with create_session(scoped=False) as session:
-        subscribed = session.scalars(
-            select(AssetModel).where(AssetModel.name.in_(candidates), AssetModel.active.has())
-        ).all()
-        for asset_model in subscribed:
-            asset_event = asset_manager.register_asset_change(
-                asset=asset_model, extra=extra, session=session, **team_arguments
-            )
-            if asset_event is not None:
-                asset_events[asset_model.name] = asset_event.id
+    try:
+        # Leaving the block commits, so a delivery is only acknowledged once its events and its row are
+        # stored, which is also what lets a retry find the row.
+        with create_session(scoped=False) as session:
+            original = find_delivery(session, webhook.name, delivery_id, body_digest)
+            # A retry. A delivery that recorded nothing is processed again instead: a redelivery after
+            # subscribing to one of its names is how its README walkthrough ends.
+            if original is not None and original.outcome == EVENTS_RECORDED:
+                log.debug("Webhook %s: delivery %r was recorded before", webhook.name, delivery_id)
+                return build_response(original.asset_events, original.candidates)
+            subscribed = session.scalars(
+                select(AssetModel).where(AssetModel.name.in_(candidates), AssetModel.active.has())
+            ).all()
+            for asset_model in subscribed:
+                asset_event = asset_manager.register_asset_change(
+                    asset=asset_model, extra=extra, session=session, **team_arguments
+                )
+                if asset_event is not None:
+                    asset_events[asset_model.name] = asset_event.id
+            recorded = {
+                "candidates": candidates,
+                "asset_events": asset_events,
+                "outcome": EVENTS_RECORDED if asset_events else NO_SUBSCRIBERS,
+                # A delivery no Dag subscribes to keeps its names, for troubleshooting, but not its
+                # payload, so a sender that sends every event does not fill the table.
+                "payload": event.payload if asset_events else None,
+            }
+            if original is None:
+                session.execute(
+                    delivery_table.insert().values(
+                        id=str(uuid.uuid4()),
+                        webhook=webhook.name,
+                        delivery_id=delivery_id,
+                        body_digest=body_digest,
+                        received_at=datetime.now(tz=timezone.utc),
+                        source_type=webhook.source_type,
+                        # Longer paths cannot be in an asset name anyway.
+                        path=None if event.path is None else event.path[:MAX_PATH_LENGTH],
+                        team_name=webhook.team_name,
+                        **recorded,
+                    )
+                )
+            elif asset_events:
+                # Only if no other copy of the redelivery has recorded its events in the meantime:
+                # the update waits for that copy's transaction, and then matches nothing.
+                result = session.execute(
+                    update(delivery_table)
+                    .where(delivery_table.c.id == original.id, delivery_table.c.outcome != EVENTS_RECORDED)
+                    .values(**recorded)
+                )
+                if cast("CursorResult[Any]", result).rowcount != 1:
+                    raise RecordedMeanwhile
+    except (IntegrityError, RecordedMeanwhile):
+        # A copy that arrived while another was being recorded: rolling back the transaction undid its
+        # events, and it gets the answer that copy got.
+        with create_session(scoped=False) as session:
+            original = find_delivery(session, webhook.name, delivery_id, body_digest)
+        if original is None:
+            raise
+        return build_response(original.asset_events, original.candidates)
     if not asset_events:
         # Debug only: a webhook that sends every event would otherwise log most deliveries.
         log.debug("Webhook %s: no Dag schedules on any of its candidates %s", webhook.name, candidates)
-    return {
-        "status": "accepted" if asset_events else "no_subscribers",
-        "asset_events": asset_events,
-        "candidates": candidates,
-    }
+    return build_response(asset_events, candidates)
 
 
 def build_app() -> FastAPI:

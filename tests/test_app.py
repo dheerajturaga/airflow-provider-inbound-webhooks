@@ -10,6 +10,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from http import HTTPStatus
+from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
@@ -23,6 +24,10 @@ from sqlalchemy.orm import Session
 
 from airflow_inbound_webhooks import app
 from airflow_inbound_webhooks.app import build_app, get_asset_change_arguments
+from airflow_inbound_webhooks.models import delivery_table
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Row
 
 pytestmark = pytest.mark.usefixtures("clean_db")
 
@@ -64,6 +69,7 @@ def post_github(
     secret: str = SECRET,
     content_type: str = "application/json",
     body: bytes | None = None,
+    delivery_id: str = "delivery-1",
 ):
     body = json.dumps(payload).encode() if body is None else body
     signature = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
@@ -74,13 +80,29 @@ def post_github(
             "content-type": content_type,
             "X-Hub-Signature-256": f"sha256={signature}",
             "X-GitHub-Event": event,
-            "X-GitHub-Delivery": "delivery-1",
+            "X-GitHub-Delivery": delivery_id,
+        },
+    )
+
+
+def post_deploybot(client: TestClient, payload: dict):
+    body = json.dumps(payload).encode()
+    return client.post(
+        "/deploybot",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "X-Signature": hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest(),
         },
     )
 
 
 def count_asset_events(session) -> int:
     return session.scalar(select(func.count()).select_from(AssetEvent))
+
+
+def get_deliveries(session) -> list[Row]:
+    return list(session.execute(select(delivery_table).order_by(delivery_table.c.received_at)))
 
 
 def get_queued_dag_ids(session) -> set[str]:
@@ -374,6 +396,14 @@ def test_rejected_delivery(client, session, subscribe, delivery, expected_status
             },
             id="no-body-allowed",
         ),
+        pytest.param(
+            {
+                "conn_type": "generic",
+                "password": SECRET,
+                "extra": {"source_type": "github", "team_name": "t" * 51},
+            },
+            id="team-name-too-long",
+        ),
     ],
 )
 def test_misconfigured_connection_fails_closed(client, conn):
@@ -394,6 +424,171 @@ def test_delivery_is_not_acknowledged_when_its_events_are_not_stored(session, su
 
     assert response.status_code == 500
     assert count_asset_events(session) == 0
+    assert get_deliveries(session) == []
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_delivery_is_recorded_with_what_arrived(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    response = post_github(client)
+
+    (delivery,) = get_deliveries(session)
+    assert delivery._asdict() == {
+        "id": mock.ANY,
+        "webhook": "github",
+        "delivery_id": "delivery-1",
+        "body_digest": hashlib.sha256(json.dumps(LABELED).encode()).hexdigest(),
+        "received_at": mock.ANY,
+        "source_type": "github",
+        "path": "my-org/web",
+        "candidates": response.json()["candidates"],
+        "asset_events": response.json()["asset_events"],
+        "correlation_key": None,
+        "outcome": "events_recorded",
+        "team_name": None,
+        "payload": LABELED,
+    }
+    assert delivery.received_at.tzinfo is not None
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_unmatched_delivery_keeps_its_names_but_not_its_payload(client, session):
+    response = post_github(client)
+
+    (delivery,) = get_deliveries(session)
+    assert (delivery.outcome, delivery.candidates, delivery.payload) == (
+        "no_subscribers",
+        response.json()["candidates"],
+        None,
+    )
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_retried_delivery_is_answered_as_before_and_not_recorded_again(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    first, retry = post_github(client), post_github(client)
+
+    assert retry.status_code == 202
+    assert retry.json() == first.json()
+    assert count_asset_events(session) == 1
+    assert len(get_deliveries(session)) == 1
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_retry_recorded_concurrently_gets_the_answer_of_the_delivery_it_repeats(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    first = post_github(client)
+    find_delivery = app.find_delivery
+
+    def find_after_the_first_delivery_committed(*args):
+        # The first lookup misses, as when both requests check before either has committed.
+        return None if find.call_count == 1 else find_delivery(*args)
+
+    with mock.patch.object(app, "find_delivery", side_effect=find_after_the_first_delivery_committed) as find:
+        retry = post_github(client)
+
+    assert retry.json() == first.json()
+    assert count_asset_events(session) == 1
+    assert len(get_deliveries(session)) == 1
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_redelivery_after_subscribing_records_the_delivery(client, session, subscribe):
+    # How the README's walkthrough ends: send the event once, subscribe to a name it offered, redeliver.
+    assert post_github(client).json()["status"] == "no_subscribers"
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    assert post_github(client).json()["status"] == "accepted"
+
+    assert count_asset_events(session) == 1
+    assert [(delivery.outcome, delivery.payload) for delivery in get_deliveries(session)] == [
+        ("events_recorded", LABELED)
+    ]
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_redelivery_recorded_meanwhile_gets_the_answer_of_the_copy_that_recorded_it(
+    client, session, subscribe
+):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    first = post_github(client)
+    (recorded,) = get_deliveries(session)
+    find_delivery = app.find_delivery
+
+    def find_before_the_other_copy_committed(*args):
+        # The first lookup sees the row as it was before another copy recorded the delivery's events.
+        if find.call_count == 1:
+            return mock.Mock(id=recorded.id, outcome="no_subscribers", asset_events={}, candidates=[])
+        return find_delivery(*args)
+
+    with mock.patch.object(app, "find_delivery", side_effect=find_before_the_other_copy_committed) as find:
+        retry = post_github(client)
+
+    assert retry.json() == first.json()
+    assert count_asset_events(session) == 1
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_another_body_under_a_recorded_delivery_id_is_a_new_delivery(client, session, subscribe):
+    # The delivery ID is a header no signature covers, so it cannot claim a body it did not come with.
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    post_github(client)
+    post_github(client, {**LABELED, "number": 8})
+
+    assert count_asset_events(session) == 2
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_empty_delivery_id_is_no_delivery_id(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    for _ in range(2):
+        post_github(client, delivery_id="")
+
+    assert count_asset_events(session) == 2
+    assert [delivery.delivery_id for delivery in get_deliveries(session)] == [None, None]
+
+
+@mock.patch.dict(os.environ, DEPLOYBOT_CONN)
+def test_path_too_long_for_its_column_is_stored_shortened(client, session, subscribe):
+    subscribe("smoke_test_any_service", "deploybot/*/deployed")
+
+    post_deploybot(client, {"event": "deployed", "service": "x" * 2000})
+
+    (delivery,) = get_deliveries(session)
+    assert delivery.path == "x" * 1500
+    assert count_asset_events(session) == 1
+
+
+@mock.patch.dict(os.environ, DEPLOYBOT_CONN)
+def test_deliveries_without_an_id_are_never_taken_for_retries(client, session, subscribe):
+    subscribe("smoke_test_billing", "deploybot/billing/deployed")
+
+    for _ in range(2):
+        assert post_deploybot(client, {"event": "deployed", "service": "billing"}).status_code == 202
+
+    assert count_asset_events(session) == 2
+    assert [delivery.delivery_id for delivery in get_deliveries(session)] == [None, None]
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_conn_env("github_enterprise", source_type="github")})
+def test_delivery_ids_are_unique_per_webhook(client, session):
+    post_github(client)
+    post_github(client, path="/github_enterprise")
+
+    assert sorted(delivery.webhook for delivery in get_deliveries(session)) == ["github", "github_enterprise"]
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_delivery_id_longer_than_can_be_stored_is_refused(client, session):
+    response = post_github(client, delivery_id="x" * 256)
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Delivery ID is longer than 255 characters"}
+    assert get_deliveries(session) == []
 
 
 @mock.patch.dict(os.environ, build_conn_env("github", team_name="team_a"))
