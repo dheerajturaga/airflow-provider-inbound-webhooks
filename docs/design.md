@@ -12,7 +12,8 @@ documentation is in the [README](../README.md).
    result, a missing or invalid connection included, is reused for `connection_cache_ttl` seconds.
    Its password is the shared secret; its extra selects the source type and its options. A missing
    connection is a `404`, an invalid one a `503`.
-3. The body is read up to `max_body_bytes`.
+3. A webhook over `rate_limit_per_minute` is a `429`, counted per process before its body is read,
+   so a flood costs no signature checks and no writes. The body is read up to `max_body_bytes`.
 4. The source type verifies the signature or token, then parses the delivery into a path and kinds.
 5. `naming.build_candidate_names` turns those into every subscribable name.
 6. If the delivery table already holds the delivery's ID and body digest for this webhook, and that
@@ -24,7 +25,8 @@ documentation is in the [README](../README.md).
    before responding, so `accepted` means the events and the row are stored. A copy of the delivery
    that arrives while the first is being recorded fails on the unique constraint, or for a
    redelivery on an update that only matches a row with no events, which rolls back its events, and
-   it is answered from the first copy's row.
+   it is answered from the first copy's row. A database that cannot be used, or lacks the delivery
+   table, is a `503` with `Retry-After`, logged at most once a minute.
 
 The plugin never creates Dag runs; Airflow's own asset scheduling does.
 

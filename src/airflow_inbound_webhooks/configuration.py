@@ -15,6 +15,7 @@ from typing import Any
 SECTION = "inbound_webhooks"
 WEBHOOK_NAMES = "webhook_names"
 CONNECTION_CACHE_TTL = "connection_cache_ttl"
+RATE_LIMIT_PER_MINUTE = "rate_limit_per_minute"
 ANY_WEBHOOK_NAME = "*"
 DEFAULT_CONNECTION_CACHE_TTL = 60
 
@@ -48,6 +49,18 @@ def build_config_section() -> dict[str, Any]:
                     "type": "integer",
                     "example": "300",
                     "default": str(DEFAULT_CONNECTION_CACHE_TTL),
+                },
+                RATE_LIMIT_PER_MINUTE: {
+                    "description": (
+                        "Deliveries each API server worker accepts per webhook and minute. More are "
+                        "answered with 429 and Retry-After before their body is read or verified. Each "
+                        "worker counts on its own, so N workers accept up to N times as many. 0 turns the "
+                        "limit off."
+                    ),
+                    "version_added": "0.2.0",
+                    "type": "integer",
+                    "example": "600",
+                    "default": "0",
                 },
             },
         }

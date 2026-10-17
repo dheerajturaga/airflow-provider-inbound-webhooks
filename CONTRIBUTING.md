@@ -106,7 +106,9 @@ lookup and recording, is shared. Source types live in `src/airflow_inbound_webho
 
 1. Subclass `WebhookSource` and implement:
    - `verify(headers, body, secret)`: raise `WebhookVerificationError` unless the request carries a
-     valid signature or token for `secret`. Compare with `hmac.compare_digest`, never `==`.
+     valid signature or token for `secret`. Compare with `hmac.compare_digest`, never `==`. Any
+     other exception is answered like a failed verification, with `401`, and logged with its
+     traceback.
    - `parse(headers, body)`: return a `WebhookEvent` with the `path` (where it happened, `/`-separated,
      broad to narrow) and `kinds` (what happened, each a tuple from broad to specific), and raise
      `ValueError` for a malformed body. Read payload fields with `get_text()`, which treats a value
