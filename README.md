@@ -441,7 +441,8 @@ Deeper paths work the same way. For a GitLab project `platform/backend/api`,
 
 **Finding a name:** every response lists the names it offered as `candidates`, so send the event
 once and copy one. A delivery that matches no subscribed name is answered with
-`202 no_subscribers` and nothing is stored.
+`202 no_subscribers` and records no asset event; its [delivery record](#delivery-records) keeps its
+names, without the payload.
 
 Non-ASCII characters are folded (`🚀 deploy` → `deploy`) on every database, because MySQL stores
 asset names as latin1 and fails any lookup that includes a non-ASCII name. Parts that end up empty
