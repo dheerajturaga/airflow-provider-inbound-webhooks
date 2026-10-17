@@ -189,9 +189,17 @@ class TestGitLabSource:
     def test_parse(self, payload, expected_kinds):
         payload = {**payload, "project": {"path_with_namespace": "group/sub/web"}}
 
+        parsed = parse_json(GitLabSource(), payload, **{"Idempotency-Key": "k-1"})
+
+        assert (parsed.path, parsed.kinds, parsed.delivery_id) == ("group/sub/web", expected_kinds, "k-1")
+
+    def test_event_uuid_is_not_a_delivery_id(self):
+        # Recursive webhooks share it, so it would take distinct deliveries for retries.
+        payload = {"object_kind": "push", "project": {"path_with_namespace": "group/web"}}
+
         parsed = parse_json(GitLabSource(), payload, **{"X-Gitlab-Event-UUID": "u-1"})
 
-        assert (parsed.path, parsed.kinds, parsed.delivery_id) == ("group/sub/web", expected_kinds, "u-1")
+        assert parsed.delivery_id is None
 
     def test_parse_rejects_missing_object_kind(self):
         with pytest.raises(ValueError, match="object_kind"):

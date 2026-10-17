@@ -8,7 +8,10 @@ import os
 import subprocess
 import sys
 import tempfile
+from importlib.metadata import version
 from pathlib import Path
+
+from packaging.version import Version
 
 # Airflow reads its configuration when first imported, so this must run before any Airflow import.
 AIRFLOW_HOME = Path(tempfile.mkdtemp(prefix="airflow-inbound-webhooks-tests-"))
@@ -32,6 +35,10 @@ os.environ.update(
         "AIRFLOW__INBOUND_WEBHOOKS__WEBHOOK_NAMES": "*",
     }
 )
+# Airflow 3.2 and later find the DB manager in the provider metadata, which the tests rely on there;
+# 3.1 only runs it when configured, as the README tells its users to.
+if Version(version("apache-airflow")) < Version("3.2"):
+    os.environ["AIRFLOW__DATABASE__EXTERNAL_DB_MANAGERS"] = "airflow_inbound_webhooks.db.WebhooksDBManager"
 
 import pytest  # noqa: E402
 from airflow.models.asset import (  # noqa: E402
@@ -47,8 +54,11 @@ from airflow.models.dagbundle import DagBundleModel  # noqa: E402
 from airflow.utils.session import create_session  # noqa: E402
 from sqlalchemy import delete  # noqa: E402
 
+from airflow_inbound_webhooks.models import delivery_table  # noqa: E402
+
 # Children first, so deletes satisfy foreign keys.
 CLEARED_MODELS = (
+    delivery_table,
     AssetDagRunQueue,
     AssetEvent,
     DagScheduleAssetReference,

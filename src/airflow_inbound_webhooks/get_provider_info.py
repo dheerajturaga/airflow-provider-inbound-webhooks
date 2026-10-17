@@ -27,4 +27,6 @@ def get_provider_info() -> dict[str, Any]:
             }
         ],
         "config": configuration.build_config_section(),
+        # Airflow 3.2 and later run it on airflow db migrate; 3.1 ignores the key.
+        "db-managers": ["airflow_inbound_webhooks.db.WebhooksDBManager"],
     }

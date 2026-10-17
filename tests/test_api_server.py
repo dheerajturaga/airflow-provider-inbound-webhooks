@@ -34,6 +34,7 @@ from sqlalchemy import select
 
 from airflow_inbound_webhooks.app import supports_team_attribution
 from airflow_inbound_webhooks.connection_form import CONN_TYPE, FIELDS, HOOK_NAME
+from airflow_inbound_webhooks.models import delivery_table
 
 pytestmark = pytest.mark.usefixtures("clean_db")
 
@@ -143,6 +144,8 @@ def test_signed_delivery_queues_subscribed_dag(api_server_url, session, subscrib
     assert (status, body["status"], list(body["asset_events"])) == (202, "accepted", [ASSET_NAME])
     assert [extra["source"] for extra in session.scalars(select(AssetEvent.extra))] == ["github"]
     assert list(session.scalars(select(AssetDagRunQueue.target_dag_id))) == ["web_deploy_preview"]
+    # The table exists where Airflow put it, and the API server process can write to it.
+    assert list(session.scalars(select(delivery_table.c.outcome))) == ["events_recorded"]
 
 
 def test_wrong_secret_is_rejected(api_server_url, session, subscribe, webhook_connection):
