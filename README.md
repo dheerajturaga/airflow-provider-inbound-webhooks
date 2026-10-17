@@ -744,6 +744,11 @@ while the API server is unreachable is only retried if the sending service retri
 **Does it replace sensors?** For "wait until another system finishes something", yes: the other
 system's webhook triggers the Dag instead of a sensor polling it.
 
+## Who uses it
+
+Organizations that use this provider are listed [in the wild](INTHEWILD.md). If yours does, open a
+pull request that adds it to the list.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, tests and adding a source type, and
