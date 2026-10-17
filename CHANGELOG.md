@@ -16,13 +16,18 @@ breaking change, listed under "Changed event names" with the old and new names.
   longer queue Dags again. A redelivery of a delivery that recorded nothing is processed again. A
   delivery ID longer than 255 characters is refused with `400`, and an empty one counts as none.
 - `outcome` and `delivery_id` in every `202` answer. `outcome` is `events_recorded`,
-  `no_subscribers`, or `duplicate` for a retry.
+  `no_subscribers`, `dag_paused`, or `duplicate` for a retry.
 - `[inbound_webhooks] rate_limit_per_minute`, off by default: verified deliveries over it are
   answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification
   do not count, and each API server worker counts on its own.
 
 ### Changed
 
+- Asset events are only recorded on names that a Dag schedules on, directly or through
+  `Asset.ref(name=...)` or `Asset.ref(uri=...)`, which is not stale, paused or, on Airflow 3.4 and
+  later, draining. A delivery that only paused or draining Dags subscribe to records
+  nothing and is answered with `outcome` `dag_paused`; before, it recorded asset events that Airflow
+  queued no Dag for. Stale Dags no longer count as subscribers.
 - A delivery that cannot be recorded because the database is unavailable, or the delivery table is
   missing, is answered with `503` and `Retry-After` instead of `500`, so senders that retry try again.
   The failure is logged at most once a minute.
