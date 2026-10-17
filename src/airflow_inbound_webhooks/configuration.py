@@ -33,8 +33,8 @@ def build_config_section() -> dict[str, Any]:
                         "Comma-separated names of the webhooks to serve, each with a webhook_<name> "
                         "connection. Requests for other names are answered with 404 without looking up "
                         "a connection, so they cannot add calls to a secrets backend. Empty serves no "
-                        f"webhook; {ANY_WEBHOOK_NAME} serves any name and looks its connection up on "
-                        "every delivery."
+                        f"webhook. {ANY_WEBHOOK_NAME}, which serves any name and looks its connection up on "
+                        "every delivery, is deprecated and will be removed in a later release."
                     ),
                     "version_added": "0.1.0",
                     "type": "string",

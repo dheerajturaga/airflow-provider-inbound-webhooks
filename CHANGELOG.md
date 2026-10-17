@@ -59,6 +59,12 @@ breaking change, listed under "Changed event names" with the old and new names.
   keep across retries, instead of `X-Gitlab-Event-UUID`, which webhooks triggered by earlier webhooks
   share. Deliveries from older GitLab versions have no `delivery_id`.
 
+### Deprecated
+
+- `[inbound_webhooks] webhook_names = *`, which serves any name and so reads a connection on every
+  delivery. It logs a warning once per API server worker and will be removed in a later release:
+  list the webhook names to serve instead.
+
 ## 0.1.0 - 2026-10-14
 
 ### Added
