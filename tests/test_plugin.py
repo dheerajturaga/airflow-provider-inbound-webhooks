@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 # Only the endpoint uses these, so only the API server should import them, on the first delivery.
-ENDPOINT_ONLY_MODULES = {"airflow.assets.manager", "airflow.models.asset"}
+ENDPOINT_ONLY_MODULES = {"airflow.assets.manager", "airflow.models.asset", "airflow_inbound_webhooks.models"}
 # Airflow imports plugins in every process, including each task run, once the Task SDK is loaded.
 # Airflow 3.1 imports the endpoint's modules itself while loading it, so only what the plugin adds counts.
 IMPORT_PLUGIN = """

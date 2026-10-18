@@ -60,6 +60,7 @@ The tests are organised as:
 | `tests/test_plugin.py` | That importing the plugin, which every Airflow process does, leaves the endpoint's Airflow internals unimported |
 | `tests/test_examples.py` | That every example Dag file builds against the installed Airflow, and that the README quick start writes the quick start Dag unchanged |
 | `tests/test_provider_info.py` | That the provider metadata conforms to the installed Airflow's schema |
+| `tests/test_db.py` | The delivery table: created by `airflow db migrate`, and the same whether built from the metadata or the migrations |
 
 Every change in behaviour needs a test that fails without it.
 
@@ -128,6 +129,19 @@ existing delivery produces is a breaking change; see "Stability" under "Event na
 Adding a kind or a detail is not, because the shorter names are still offered. The connection
 options a source type reads, and the fields a summary keeps, are public interfaces too; see
 "Versioning" in the README.
+
+## Changing the delivery table
+
+The table is defined in `src/airflow_inbound_webhooks/models.py` and created by the migrations in
+`src/airflow_inbound_webhooks/migrations/versions/`. Depending on the Airflow version, and on
+whether Airflow's own tables exist already, `airflow db migrate` builds the table from either one, so
+a change needs both:
+
+1. Change the table in `models.py`.
+2. Add a revision whose `down_revision` is the current head, named
+   `<number>_<release>_<description>.py` like the first one, with `inbound_webhooks_version` set to
+   the release that ships it.
+3. Run `tests/test_db.py`, which fails until the model and the migrations give the same schema.
 
 ## Releasing
 

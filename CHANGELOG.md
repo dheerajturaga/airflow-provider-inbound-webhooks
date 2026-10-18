@@ -8,6 +8,22 @@ breaking change, listed under "Changed event names" with the old and new names.
 
 ## Unreleased
 
+### Added
+
+- Delivery records: every verified delivery is stored in a new table, `inbound_webhooks_delivery`,
+  in the transaction that records its asset events. A retry, which repeats the sender's delivery ID
+  and the body, gets the answer the delivery got and records nothing, so a service's retries no
+  longer queue Dags again. A redelivery of a delivery that recorded nothing is processed again. A
+  delivery ID longer than 255 characters is refused with `400`, and an empty one counts as none.
+
+### Changed
+
+- Upgrading needs `airflow db migrate`, which creates the table. On Airflow 3.1, first add
+  `airflow_inbound_webhooks.db.WebhooksDBManager` to `[database] external_db_managers`.
+- `gitlab` deliveries take their `delivery_id` from `Idempotency-Key`, which GitLab 17.4 and later
+  keep across retries, instead of `X-Gitlab-Event-UUID`, which webhooks triggered by earlier webhooks
+  share. Deliveries from older GitLab versions have no `delivery_id`.
+
 ## 0.1.0 - 2026-10-14
 
 ### Added
