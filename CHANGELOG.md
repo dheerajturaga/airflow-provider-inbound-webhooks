@@ -84,7 +84,6 @@ breaking change, listed under "Changed event names" with the old and new names.
   requests can now cost two connection reads per webhook and `connection_cache_ttl`, not one.
 - A JSON body holding `NaN` or `Infinity`, which JSON does not allow and MySQL refuses to store, is
   answered with `400`.
-
 - Upgrading needs `airflow db migrate`, which creates the table. On Airflow 3.1, first add
   `airflow_inbound_webhooks.db.WebhooksDBManager` to `[database] external_db_managers`.
 - `gitlab` deliveries take their `delivery_id` from `Idempotency-Key`, which GitLab 17.4 and later
