@@ -151,6 +151,17 @@ INBOUND_WEBHOOKS_RECORD_NAMES=1 .venv/bin/pytest tests/test_name_stability.py
 git diff tests/candidate_names.json
 ```
 
+The same module checks the names the README and the example Dags use against those deliveries, so
+each webhook the README sets up, with a connection or a URL, needs deliveries there:
+
+- A `text` block of names in the README, with a name at the start of each line and two spaces or
+  more before what it means, lists all the names one delivery offers, in the order it offers them.
+  A block of one name shows just that name.
+- Every other name must be one that a delivery offers: in the example Dags, every asset a file
+  defines; in the README, every asset its Python builds, in code blocks and between backticks, and
+  every name between backticks, where `gitlab/platform/*/...` stands for the names that start with
+  `gitlab/platform/*/`. To build assets in the README some other way, add it to `README_NAMESPACE`.
+
 ## Changing the delivery table
 
 The table is defined in `src/airflow_inbound_webhooks/models.py` and created by the migrations in

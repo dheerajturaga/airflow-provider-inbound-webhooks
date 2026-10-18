@@ -17,22 +17,26 @@ them::
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import hmac
 import json
 import os
 import re
+import runpy
+import textwrap
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, NamedTuple
 from unittest import mock
 
 import pytest
+from airflow.sdk import Asset
 from airflow.utils.session import create_session
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 
-from airflow_inbound_webhooks.app import build_app
+from airflow_inbound_webhooks.app import WEBHOOK_NAME_PATTERN, build_app
 from airflow_inbound_webhooks.models import delivery_table
 
 ROOT = Path(__file__).parents[1]
@@ -304,12 +308,12 @@ DELIVERIES: dict[str, Delivery] = {
     "deploybot-deployed": Delivery("deploybot", {}, {"type": "deployed", "service": "billing"}),
     "alerts-monitor_alert": Delivery("alerts", {}, {"event_type": "monitor_alert"}),
 }
-WEBHOOKS = sorted({delivery.webhook for delivery in DELIVERIES.values()})
 README = ROOT / "README.md"
 EXAMPLE_DAGS = sorted((ROOT / "examples" / "dags").glob("*.py"))
-ASSET_NAME = re.compile(r'Asset\("([^"]+)"\)')
-# A name in code in the README's text. Placeholders, such as <group>, are not names.
-INLINE_NAME = re.compile(rf"`((?:{'|'.join(map(re.escape, WEBHOOKS))})/[^`<]*)`")
+# What the README's Python may build assets with, by the name it calls each one.
+README_NAMESPACE: dict[str, Any] = {"Asset": Asset}
+# A line of a text block of names starts with a webhook's name and a slash.
+NAME_LINE = re.compile(r"[a-z0-9][a-z0-9_-]*/")
 
 
 @pytest.fixture(scope="module")
@@ -367,58 +371,170 @@ def test_names_are_only_recorded_for_deliveries_that_are_tested(recorded_names):
     )
 
 
-def find_name_lists(markdown: str) -> list[list[str]]:
-    """
-    Return each list of the names that the README shows one delivery offering.
+def find_readme_webhooks(markdown: str) -> set[str]:
+    """Return the webhooks the README sets up, by the connections it adds and the URLs it gives them."""
+    # Commands rather than any webhook_<name>: the option webhook_names is not a connection.
+    connections = re.findall(r"connections add webhook_(\S+)", markdown)
+    urls = re.findall(r"/webhooks/([^\s/`'\"),]+)", markdown)
+    # Not the routes that no webhook can be named after, such as /webhooks/_health, nor placeholders.
+    return {webhook for webhook in connections + urls if WEBHOOK_NAME_PATTERN.fullmatch(webhook)}
 
-    These are its ``text`` blocks of names, a name at the start of each line, and the quick start's answer.
-    """
-    lists = [
-        [re.split(r" {2,}", line.strip())[0] for line in block.strip().splitlines()]
+
+def find_code_spans(markdown: str) -> list[str]:
+    """Return the code spans in the README's text, as Markdown shows them: a line break is a space."""
+    text = re.sub(r"```.*?```", "", markdown, flags=re.DOTALL)
+    return [re.sub(r"\s*\n\s*", " ", span) for span in re.findall(r"`([^`]+)`", text)]
+
+
+def is_call(source: str) -> bool:
+    try:
+        return isinstance(ast.parse(source, mode="eval").body, ast.Call)
+    except SyntaxError:
+        return False
+
+
+def resolve(callee: ast.expr) -> Any:
+    """Return what a call's callee, such as ``Asset`` or ``Asset.ref``, is in README_NAMESPACE, or None."""
+    if isinstance(callee, ast.Name):
+        return README_NAMESPACE.get(callee.id)
+    if isinstance(callee, ast.Attribute) and (owner := resolve(callee.value)) is not None:
+        return getattr(owner, callee.attr, None)
+    return None
+
+
+def build_names(source: str) -> list[str]:
+    """Return the name of each asset that Python code builds with README_NAMESPACE, whatever its form."""
+    names = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or (build := resolve(node.func)) is None:
+            continue
+        values = [*node.args, *(keyword.value for keyword in node.keywords)]
+        # A placeholder, as in Asset.ref(name=...), stands for any name.
+        if any(isinstance(value, ast.Constant) and value.value is Ellipsis for value in values):
+            continue
+        try:
+            args = [ast.literal_eval(arg) for arg in node.args]
+            kwargs = {keyword.arg: ast.literal_eval(keyword.value) for keyword in node.keywords}
+        except ValueError:
+            pytest.fail(f"The README builds an asset from more than literals: {ast.unparse(node)}")
+        built = build(*args, **kwargs)
+        # Asset.ref(uri=...) has no name, and webhook events are on assets whose URI is their name.
+        names.append(getattr(built, "name", None) or built.uri)
+    return names
+
+
+def find_built_names(markdown: str) -> list[str]:
+    """Return the names of the assets the README's Python builds: its python blocks, and calls in code."""
+    blocks = re.findall(r"```python\n(.*?)^ *```", markdown, re.DOTALL | re.MULTILINE)
+    sources = [textwrap.dedent(block) for block in blocks] + list(filter(is_call, find_code_spans(markdown)))
+    return [name for source in sources for name in build_names(source)]
+
+
+def is_misspelling(word: str, of: str) -> bool:
+    """Whether ``word`` is ``of`` with one character added, left out or changed, or two adjacent swapped."""
+    shorter, longer = sorted((word, of), key=len)
+    if word == of or len(longer) > len(shorter) + 1:
+        return False
+    if len(longer) > len(shorter):
+        return any(longer[:i] + longer[i + 1 :] == shorter for i in range(len(longer)))
+    differ = [i for i, (a, b) in enumerate(zip(word, of)) if a != b]
+    return len(differ) == 1 or (
+        len(differ) == 2
+        and differ[1] == differ[0] + 1
+        and (word[differ[0]], word[differ[1]]) == (of[differ[1]], of[differ[0]])
+    )
+
+
+def find_name_spans(markdown: str, webhooks: set[str]) -> list[str]:
+    """Return the code spans in the README's text that are names, or would be but for a misspelling."""
+    names = []
+    for span in find_code_spans(markdown):
+        webhook, slash, _ = span.partition("/")
+        # Placeholders, as in gitlab/<group>/*/..., are not names.
+        if (
+            slash
+            and "<" not in span
+            and any(webhook == known or is_misspelling(webhook, known) for known in webhooks)
+        ):
+            names.append(span)
+    return names
+
+
+def find_name_lists(markdown: str) -> list[list[str]]:
+    """Return the names in each of the README's text blocks of names, one at the start of each line."""
+    blocks = [
+        [line.strip() for line in block.splitlines() if line.strip()]
         for block in re.findall(r"```text\n(.*?)```", markdown, re.DOTALL)
     ]
-    answer = re.search(r'^ *(\{"status":.*\})$', markdown, re.MULTILINE)
-    assert answer is not None
-    names_only = [names for names in lists if names[0].split("/")[0] in WEBHOOKS]
-    return [*names_only, json.loads(answer.group(1))["candidates"]]
+    # Two spaces or more end a name and start what it means, as names can hold single spaces.
+    return [
+        [re.split(r" {2,}", line)[0] for line in lines]
+        for lines in blocks
+        if lines and NAME_LINE.match(lines[0])
+    ]
 
 
-def test_names_the_readme_shows_a_delivery_offering_are_all_it_offers(offered_names):
-    name_lists = find_name_lists(README.read_text())
-
-    # The quick start's names and its answer, a label added to a pull request, and a Jira transition.
-    assert len(name_lists) >= 4
-    unmatched = [names for names in name_lists if names not in offered_names.values()]
-    assert unmatched == [], (
-        f"The README shows a delivery offering these names, in this order, and none does: {unmatched}. "
-        f"Either the README is wrong, or deliveries no longer offer the names it shows. {BREAKING_CHANGE}"
-    )
+def find_example_names() -> list[tuple[str, str]]:
+    """Return the name of each asset an example Dag file defines, however it is built, with the file's."""
+    return [
+        (path.name, value.name)
+        for path in EXAMPLE_DAGS
+        for value in runpy.run_path(str(path)).values()
+        if isinstance(value, Asset)
+    ]
 
 
 def find_documented_names() -> list[tuple[str, str]]:
     """Return each name the README and the example Dags schedule on or mention, with its file's name."""
-    found = [
-        (path.name, name) for path in [README, *EXAMPLE_DAGS] for name in ASSET_NAME.findall(path.read_text())
+    markdown = README.read_text()
+    webhooks = find_readme_webhooks(markdown) | {delivery.webhook for delivery in DELIVERIES.values()}
+    in_readme = [
+        *find_built_names(markdown),
+        *find_name_spans(markdown, webhooks),
+        # A block of one name shows that name, not all the names a delivery offers.
+        *(names[0] for names in find_name_lists(markdown) if len(names) == 1),
     ]
-    return found + [(README.name, name) for name in INLINE_NAME.findall(README.read_text())]
+    return [(README.name, name) for name in in_readme] + find_example_names()
+
+
+def is_offered(name: str, offered: set[str]) -> bool:
+    # "gitlab/platform/*/..." and "github/" stand for the names that start with them.
+    if (prefix := name.removesuffix("...")).endswith("/"):
+        return any(offered_name.startswith(prefix) for offered_name in offered)
+    return name in offered
+
+
+def test_webhooks_the_readme_sets_up_have_deliveries():
+    webhooks = find_readme_webhooks(README.read_text())
+
+    assert {"demo", "github"} <= webhooks, f"Found only these webhooks in the README: {sorted(webhooks)}"
+    missing = sorted(webhooks - {delivery.webhook for delivery in DELIVERIES.values()})
+    assert missing == [], (
+        f"The README sets up webhooks that no delivery in tests/test_name_stability.py goes to: {missing}. "
+        "Add deliveries of the events whose names it shows for them, with their connections."
+    )
+
+
+def test_names_the_readme_shows_a_delivery_offering_are_all_it_offers(offered_names):
+    name_lists = [names for names in find_name_lists(README.read_text()) if len(names) > 1]
+
+    # The quick start delivery's, a label added to a pull request's, and a Jira transition's.
+    assert len(name_lists) >= 3, f"Found fewer lists of names in the README's text blocks: {name_lists}"
+    unmatched = [names for names in name_lists if names not in offered_names.values()]
+    assert unmatched == [], (
+        "A text block of names in the README shows all the names one delivery offers, in the order it "
+        f"offers them, and no delivery offers these: {unmatched}. Either the README is wrong, or "
+        f"deliveries no longer offer the names it shows. {BREAKING_CHANGE}"
+    )
 
 
 def test_names_the_readme_and_the_example_dags_use_are_offered(offered_names):
     offered = {name for names in offered_names.values() for name in names}
     documented = find_documented_names()
 
-    # Every file uses names where this test looks for them.
-    assert {path for path, _ in documented} == {README.name, *(path.name for path in EXAMPLE_DAGS)}
-    # "gitlab/platform/*/..." stands for the names that start with "gitlab/platform/*/".
-    missing = [
-        (path, name)
-        for path, name in documented
-        if name not in offered
-        and not (
-            name.endswith("/...")
-            and any(offered_name.startswith(name.removesuffix("...")) for offered_name in offered)
-        )
-    ]
+    files = {README.name, *(path.name for path in EXAMPLE_DAGS)}
+    assert {path for path, _ in documented} == files, f"Found names in fewer files than {files}: {documented}"
+    missing = [(path, name) for path, name in documented if not is_offered(name, offered)]
     assert missing == [], (
         f"No delivery in tests/test_name_stability.py offers these names: {missing}. Add the delivery "
         f"that the README or the example Dag means; or, if deliveries offered them before: {BREAKING_CHANGE}"
