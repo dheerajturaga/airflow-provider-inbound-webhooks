@@ -44,8 +44,10 @@ def build_config_section() -> dict[str, Any]:
                 CONNECTION_CACHE_TTL: {
                     "description": (
                         "Seconds a listed webhook's connection, or the failure to read it, is reused "
-                        "before it is read again. A rotated secret or changed option takes up to this "
-                        "long to apply. 0 reads the connection on every delivery."
+                        "before it is read again. A changed option takes up to this long to apply. A "
+                        "delivery that fails verification has the connection read again, at most once per "
+                        "this period, so a secret changed in the connection applies to the first delivery "
+                        "signed with it. 0 reads the connection on every delivery."
                     ),
                     "version_added": "0.1.0",
                     "type": "integer",

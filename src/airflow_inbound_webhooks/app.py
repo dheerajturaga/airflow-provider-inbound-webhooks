@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from sqlalchemy import ColumnElement, Select
     from sqlalchemy.engine import CursorResult, Row
     from sqlalchemy.orm import Session
+    from starlette.datastructures import Headers
 
 log = logging.getLogger(__name__)
 
@@ -196,6 +197,9 @@ resolved_webhooks: dict[str, tuple[float, ConfiguredWebhook | HTTPException]] = 
 # One per listed webhook, held while resolving it, so the requests that find its entry expired make one
 # lookup, not one each, and a slow lookup holds up only its own webhook. Only listed names get one.
 resolve_locks: dict[str, threading.Lock] = {}
+# When a delivery that fails verification may next have each listed webhook's connection read again,
+# in time.monotonic().
+rereads_allowed_at: dict[str, float] = {}
 
 
 def get_webhook_names() -> frozenset[str]:
@@ -225,6 +229,14 @@ def warn_any_webhook_name() -> None:
     )
 
 
+def get_connection_cache_ttl() -> int:
+    return conf.getint(
+        configuration.SECTION,
+        configuration.CONNECTION_CACHE_TTL,
+        fallback=configuration.DEFAULT_CONNECTION_CACHE_TTL,
+    )
+
+
 def get_cached_resolution(name: str) -> ConfiguredWebhook | HTTPException | None:
     expires_at, resolution = resolved_webhooks.get(name, (0.0, None))
     return resolution if time.monotonic() < expires_at else None
@@ -234,9 +246,10 @@ def get_configured_webhook(name: str) -> ConfiguredWebhook:
     """
     Resolve ``POST /webhooks/<name>``, reading its connection at most once per cache TTL.
 
-    Requests are unauthenticated, so a name not in ``webhook_names`` is refused without a lookup, and
-    neither a failed lookup nor a failed verification reads the connection again before the TTL is
-    up. Otherwise anyone could make every request cost a call to the secrets backend.
+    Requests are unauthenticated, so a name not in ``webhook_names`` is refused without a lookup, a
+    failed lookup is not retried before the TTL is up, and failed verifications read the connection
+    again at most once per TTL (``reread_webhook``). Otherwise anyone could make every request cost a
+    call to the secrets backend.
     """
     names = get_webhook_names()
     if configuration.ANY_WEBHOOK_NAME in names:
@@ -251,12 +264,7 @@ def get_configured_webhook(name: str) -> ConfiguredWebhook:
             "Refused webhook %r: not in [%s] %s", name, configuration.SECTION, configuration.WEBHOOK_NAMES
         )
         raise HTTPException(HTTPStatus.NOT_FOUND, "Unknown webhook")
-    ttl = conf.getint(
-        configuration.SECTION,
-        configuration.CONNECTION_CACHE_TTL,
-        fallback=configuration.DEFAULT_CONNECTION_CACHE_TTL,
-    )
-    if ttl <= 0:
+    if (ttl := get_connection_cache_ttl()) <= 0:
         return resolve_webhook(name)
     if (resolution := get_cached_resolution(name)) is None:
         # setdefault is atomic, so concurrent first requests for a name share one lock.
@@ -274,6 +282,40 @@ def get_configured_webhook(name: str) -> ConfiguredWebhook:
 
 
 WebhookDep = Annotated[ConfiguredWebhook, Depends(get_configured_webhook)]
+
+
+def reread_webhook(webhook: ConfiguredWebhook) -> ConfiguredWebhook | None:
+    """
+    Read a cached webhook's connection again, after a delivery failed verification against it.
+
+    Return the webhook as its connection now configures it, to verify the delivery against again, so
+    a secret changed in the connection applies to the first delivery signed with it, not only once
+    the cached connection expires. Return None if the connection may not be read again yet, or no
+    longer configures a webhook.
+
+    Anyone can send a delivery that fails verification, so a webhook's connection is read again at
+    most once per ``connection_cache_ttl``. The cached entry keeps its expiry, so a read that comes
+    before the secret is changed does not keep the old secret cached for longer.
+    """
+    names = get_webhook_names()
+    # Without a cache, the connection was read for this delivery.
+    if (ttl := get_connection_cache_ttl()) <= 0 or configuration.ANY_WEBHOOK_NAME in names:
+        return None
+    with resolve_locks.setdefault(webhook.name, threading.Lock()):
+        expires_at, resolution = resolved_webhooks.get(webhook.name, (0.0, None))
+        if isinstance(resolution, ConfiguredWebhook) and resolution is not webhook:
+            # Another delivery has had the connection read since this one got it.
+            return resolution
+        now = time.monotonic()
+        if now < rereads_allowed_at.get(webhook.name, -math.inf):
+            return None
+        rereads_allowed_at[webhook.name] = now + ttl
+        try:
+            resolution = resolve_webhook(webhook.name)
+        except HTTPException as e:
+            resolution = e
+        resolved_webhooks[webhook.name] = (expires_at, resolution)
+    return resolution if isinstance(resolution, ConfiguredWebhook) else None
 
 
 @dataclass
@@ -586,6 +628,15 @@ def health() -> dict[str, str]:
     return {"status": "healthy"}
 
 
+def find_verification_error(webhook: ConfiguredWebhook, headers: Headers, body: bytes) -> Exception | None:
+    """Return why a delivery does not verify against the webhook's secret, or None if it does."""
+    try:
+        webhook.source.verify(headers, body, webhook.secret)
+    except Exception as e:
+        return e
+    return None
+
+
 # Also with a trailing slash: otherwise the router answers it with a redirect, which senders such as
 # GitHub do not follow, so a URL pasted with a slash would fail every delivery.
 @router.post("/{name}/", status_code=HTTPStatus.ACCEPTED)
@@ -596,15 +647,18 @@ def receive_webhook(
     webhook: WebhookDep,
     body: Annotated[bytes, Depends(read_limited_body)],
 ) -> dict[str, Any]:
-    try:
-        webhook.source.verify(request.headers, body, webhook.secret)
-    except WebhookVerificationError as e:
-        log.warning("Rejected delivery for webhook %s: %s", webhook.name, e)
-        raise HTTPException(HTTPStatus.UNAUTHORIZED, "Invalid webhook credentials") from e
-    except Exception as e:
+    error = find_verification_error(webhook, request.headers, body)
+    # The secret may have been changed since the connection was cached.
+    if error is not None and (reread := reread_webhook(webhook)) is not None:
+        webhook = reread
+        error = find_verification_error(webhook, request.headers, body)
+    if isinstance(error, WebhookVerificationError):
+        log.warning("Rejected delivery for webhook %s: %s", webhook.name, error)
+        raise HTTPException(HTTPStatus.UNAUTHORIZED, "Invalid webhook credentials") from error
+    if error is not None:
         # Answered as a failed verification, so what made the verifier fail cannot be told from outside.
-        log.exception("Rejected delivery for webhook %s: verifying it raised", webhook.name)
-        raise HTTPException(HTTPStatus.UNAUTHORIZED, "Invalid webhook credentials") from e
+        log.error("Rejected delivery for webhook %s: verifying it raised", webhook.name, exc_info=error)
+        raise HTTPException(HTTPStatus.UNAUTHORIZED, "Invalid webhook credentials") from error
     limit_rate(webhook)
     try:
         event = webhook.source.parse(request.headers, body)

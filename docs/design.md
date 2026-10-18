@@ -13,10 +13,13 @@ documentation is in the [README](../README.md).
    Its password is the shared secret; its extra selects the source type and its options. A missing
    connection is a `404`, an invalid one a `503`.
 3. The body is read up to `max_body_bytes`.
-4. The source type verifies the signature or token. A verified delivery over `rate_limit_per_minute`
-   is a `429`, counted per process; requests that fail verification do not count, so unsigned
-   traffic cannot have the sender's own deliveries refused. The source type then parses the delivery
-   into a path and kinds.
+4. The source type verifies the signature or token. A delivery that fails verification has the
+   connection read again, at most once per `connection_cache_ttl`, and is verified against what that
+   finds, so a secret changed in the connection applies at once. The cache entry keeps its expiry,
+   so a read before the change does not keep the old secret cached longer. A verified delivery over
+   `rate_limit_per_minute` is a `429`, counted per process; requests that fail verification do not
+   count, so unsigned traffic cannot have the sender's own deliveries refused. The source type then
+   parses the delivery into a path and kinds.
 5. `naming.build_candidate_names` turns those into every subscribable name.
 6. If the delivery table already holds the delivery's ID and body digest for this webhook, and that
    delivery recorded events, it is a retry: it is answered `200` from that row, and nothing is written. A
@@ -129,20 +132,23 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
 
 ## Open questions
 
-1. **Replay protection.** GitHub signs the body but not a timestamp; GitLab sends a bare token.
-   The delivery table recognises a retry by the sender's delivery ID and the body's digest, which only
-   catches a service's own retries: GitHub's `X-GitHub-Delivery` and GitLab's `Idempotency-Key` are headers no signature
-   covers, so a deliberate replay can change them, and the event headers along with them. Source types
-   whose signature covers a timestamp could reject old deliveries. Jira's does, through the `timestamp` in the signed body, but Jira
-   Cloud retries a failed delivery for more than an hour, so the window would have to be as long.
+1. **Replay protection.** GitHub signs the body but not a timestamp; GitLab sends a bare token. The
+   delivery table recognises a retry by the sender's delivery ID and the body's digest, which only
+   catches a service's own retries: GitHub's `X-GitHub-Delivery` and GitLab's `Idempotency-Key` are
+   headers no signature covers, so a deliberate replay can change them, and the event headers along
+   with them. Source types whose signature covers a timestamp could reject old deliveries. Jira's
+   does, through the `timestamp` in the signed body, but Jira Cloud retries a failed delivery for
+   more than an hour, so the window would have to be as long.
 2. **Probing webhook names.** `webhook_names` and the connection cache bound what unauthenticated
    requests cost: an unlisted name is refused before any lookup, and each API server worker reads a
-   listed webhook's connection at most once per `connection_cache_ttl`, even when the lookup or the
-   verification fails. With `*`, which is deprecated, nothing is cached, because the cache would keep an entry for
-   every name anyone sends. A listed name still answers a bad signature with `401` rather than
-   `404`, so which names are served can be probed. That is kept because the `404` is the main
-   troubleshooting signal and names such as `github` are easy to guess; the secret is what protects
-   a webhook. Should unlisted and unverified requests get the same answer?
+   listed webhook's connection at most twice per `connection_cache_ttl`: when its cache entry
+   expires, and once more for a delivery that fails verification, so a changed secret applies at
+   once. A failed lookup is not retried before its entry expires. With `*`, which is deprecated,
+   nothing is cached, because the cache would keep an entry for every name anyone sends. A listed
+   name still answers a bad signature with `401` rather than `404`, so which names are served can be
+   probed. That is kept because the `404` is the main troubleshooting signal and names such as
+   `github` are easy to guess; the secret is what protects a webhook. Should unlisted and unverified
+   requests get the same answer?
 3. **Plugin import weight.** Every Airflow component that loads plugins, including each task run,
    imports the plugin. The endpoint's Airflow internals are imported on the first delivery, so
    other components only pay for FastAPI and building the app, about 70 ms on Airflow 3.3. Avoiding

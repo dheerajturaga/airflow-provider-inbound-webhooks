@@ -663,7 +663,7 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
 | Option | Default | Meaning |
 |---|---|---|
 | `webhook_names` | empty | Comma-separated names of the webhooks to serve, such as `github,jira`. Requests for any other name are answered with `404` without looking up a connection. Empty serves no webhook, and the API server log says so once. `*` serves any name and reads its connection on every delivery, which lets anyone who can reach the endpoint make a call to your secrets backend; it is deprecated, logs a warning, and will be removed in a later release. Changes need an API server restart. |
-| `connection_cache_ttl` | `60` | Seconds a listed webhook's connection is reused before it is read again, including a missing or misconfigured one. A rotated secret or changed option takes up to this long to apply. `0` reads the connection on every delivery. |
+| `connection_cache_ttl` | `60` | Seconds a listed webhook's connection is reused before it is read again, including a missing or misconfigured one. A changed option takes up to this long to apply. A delivery that fails verification has the connection read again, at most once per this period, so a secret changed in the connection applies to the first delivery signed with it. `0` reads the connection on every delivery. |
 | `delivery_retention` | `7` | Days of delivery records that `airflow webhooks clean` keeps unless told otherwise. Keep it longer than any of your services retries a delivery: a retry that comes after its first delivery's record is deleted is recorded again. |
 | `rate_limit_per_minute` | `0` | Verified deliveries each API server worker records per webhook and minute; more are answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification do not count, so they cannot use the limit up. Each worker counts on its own, so N workers record up to N times as many. GitLab disables a webhook after four failed deliveries in a row, `429` included, so set the limit above what a GitLab webhook sends. `0` turns the limit off. |
 
@@ -775,10 +775,11 @@ would fail. A `200` or `202` answer has these fields:
   accept services that cannot log in. Every delivery is verified against the webhook's secret before
   anything is recorded, and unknown webhook names are answered with `404`.
 - **Only listed webhooks reach your secrets backend.** A request for a name that is not in `webhook_names` is
-  refused before any connection is read, and each listed webhook's connection is read at most once
-  per `connection_cache_ttl` by each API server worker, whatever arrives. So a flood of
-  unauthenticated requests costs your secrets backend about one call per webhook a minute. Setting
-  `webhook_names` to `*` gives this up, which is why it is deprecated.
+  refused before any connection is read, and each listed webhook's connection is read at most twice
+  per `connection_cache_ttl` by each API server worker, whatever arrives: when the cached connection
+  expires, and for a delivery that fails verification, in case the secret has just changed. So a
+  flood of unauthenticated requests costs your secrets backend about two calls per webhook a minute.
+  Setting `webhook_names` to `*` gives this up, which is why it is deprecated.
 - **Expose only your webhooks.** If the API server must be reachable by an external service, put a
   reverse proxy in front that forwards only their paths, such as `/webhooks/github`, rather than
   exposing the whole Airflow UI and API, and have it rate-limit them. `rate_limit_per_minute` also
@@ -791,8 +792,11 @@ would fail. A `200` or `202` answer has these fields:
 - **Use HTTPS.** It matters most for `token_header` and GitLab, where the secret itself travels in a
   header.
 - **Use strong secrets, ideally from a secrets backend,** which keeps them out of the metadata
-  database. After rotating one, deliveries signed with the new secret are refused until the cached
-  connection expires (`connection_cache_ttl`); redeliver them from the service's delivery log.
+  database. To rotate one, change the connection first, then the service: the first delivery signed
+  with the new secret has the connection read again, and is accepted. Deliveries the service signs
+  with the old secret in between are refused once the cached connection expires. The other way
+  round, deliveries are refused until the connection changes, and then for up to
+  `connection_cache_ttl`. Redeliver refused deliveries from the service's delivery log.
 - **Payloads are visible to anyone who can read asset events.** Each asset event stores its
   delivery's payload, and the Airflow UI and REST API show it to every user allowed to read assets,
   not only to the Dags that subscribe. GitHub push payloads, for example, include each commit
