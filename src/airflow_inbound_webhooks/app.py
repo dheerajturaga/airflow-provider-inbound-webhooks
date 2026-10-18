@@ -681,12 +681,15 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
                     raise RecordedMeanwhile
     except (IntegrityError, RecordedMeanwhile):
         # A copy that arrived while another was being recorded: rolling back the transaction undid its
-        # events, and it is answered as a retry of that copy.
+        # events. It is a retry only if that copy recorded events; otherwise it is answered as that
+        # copy was, since a redelivery of a delivery that recorded nothing is processed again.
         with create_session(scoped=False) as session:
             original = find_delivery(session, webhook.name, event.delivery_id, body_digest)
         if original is None:
             raise
-        return build_response(event.delivery_id, DUPLICATE)
+        return build_response(
+            event.delivery_id, DUPLICATE if original.outcome == ACCEPTED else original.outcome
+        )
     # Only now: the copy that lost a race, and a delivery whose commit failed, notify no one.
     notify_listeners(webhook, notifications)
     if not asset_events:

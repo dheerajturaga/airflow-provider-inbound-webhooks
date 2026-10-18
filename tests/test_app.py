@@ -868,6 +868,37 @@ def test_listener_that_fails_after_the_commit_is_logged(client, session, subscri
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
+@pytest.mark.parametrize(
+    ("subscriber", "expected_outcome"),
+    [
+        pytest.param(None, "no_subscribers", id="unmatched"),
+        pytest.param({"paused": True}, "dag_paused", id="paused"),
+    ],
+)
+def test_copy_recorded_concurrently_with_one_that_recorded_nothing_is_answered_as_that_one(
+    client, session, subscribe, subscriber, expected_outcome
+):
+    # Not as a retry: a delivery that recorded nothing is processed again when it is redelivered.
+    if subscriber is not None:
+        subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview", **subscriber)
+    post_github(client)
+    find_delivery = app.find_delivery
+
+    def find_after_the_first_delivery_committed(*args):
+        # The first lookup misses, as when both requests check before either has committed.
+        return None if find.call_count == 1 else find_delivery(*args)
+
+    with mock.patch.object(app, "find_delivery", side_effect=find_after_the_first_delivery_committed) as find:
+        copy = post_github(client)
+
+    assert (copy.status_code, copy.json()) == (
+        202,
+        {"delivery_id": "delivery-1", "outcome": expected_outcome},
+    )
+    assert [delivery.outcome for delivery in get_deliveries(session)] == [expected_outcome]
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
 def test_redelivery_after_subscribing_records_the_delivery(client, session, subscribe):
     # How the README's walkthrough ends: send the event once, subscribe to a name it offered, redeliver.
     assert post_github(client).json()["outcome"] == "no_subscribers"
@@ -1174,20 +1205,21 @@ def test_draining_dag_is_no_live_subscriber(client, session, subscribe):
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
 @pytest.mark.parametrize(
-    ("subscribed", "posts", "expected_status", "expected_outcome"),
+    ("subscriber", "posts", "expected_status", "expected_outcome"),
     [
-        pytest.param(True, 1, 202, "accepted", id="recorded"),
-        pytest.param(False, 1, 202, "no_subscribers", id="unmatched"),
-        pytest.param(True, 2, 200, "duplicate", id="retry"),
+        pytest.param({}, 1, 202, "accepted", id="recorded"),
+        pytest.param(None, 1, 202, "no_subscribers", id="unmatched"),
+        pytest.param({"paused": True}, 1, 202, "dag_paused", id="paused"),
+        pytest.param({}, 2, 200, "duplicate", id="retry"),
     ],
 )
 def test_response_says_only_what_became_of_the_delivery(
-    client, subscribe, subscribed, posts, expected_status, expected_outcome
+    client, subscribe, subscriber, posts, expected_status, expected_outcome
 ):
     # Senders show answers to people who need not be Airflow users, so the names a delivery offered
     # and its asset events are only in its record.
-    if subscribed:
-        subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    if subscriber is not None:
+        subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview", **subscriber)
 
     for _ in range(posts):
         response = post_github(client)

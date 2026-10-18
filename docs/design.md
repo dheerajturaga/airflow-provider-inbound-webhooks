@@ -36,12 +36,13 @@ documentation is in the [README](../README.md).
    `extra` holds the row's `id` as `inbound_delivery_id`, which the endpoint chooses before it
    records the events, so an event leads back to its delivery even when the sender sends no delivery
    ID; a redelivery's events hold the `id` of the row it updates, which takes the team they are
-   attributed to now. The endpoint commits its own database session before responding, so
-   `accepted` means the events and the row are stored. A copy of the delivery that arrives while the
-   first is being recorded fails on the unique constraint, or for a redelivery on an update that
-   only matches a row with no events, which rolls back its events, and it is answered as a retry. A
-   database that cannot be used, or lacks the delivery table, is a `503` with `Retry-After`,
-   logged at most once a minute.
+   attributed to now. The endpoint commits its own database session before responding, so `accepted`
+   means the events and the row are stored. A copy of the delivery that arrives while the first is
+   being recorded fails on the unique constraint, or for a redelivery on an update that only matches
+   a row with no events, which rolls back its events. It is answered as a retry if the first copy
+   recorded events, and otherwise with the first copy's outcome, since a delivery that recorded
+   nothing is processed again when it comes back. A database that cannot be used, or lacks the
+   delivery table, is a `503` with `Retry-After`, logged at most once a minute.
 9. Once the transaction has committed, the endpoint sends the asset listener notifications that
    `register_asset_change` handed back through `callback_sink`, so listeners hear only of events
    that are stored. One that fails is logged, and the delivery is still answered as recorded.
