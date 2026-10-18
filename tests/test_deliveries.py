@@ -91,7 +91,10 @@ def test_webhook_whose_connection_cannot_be_read_shows_nothing(client, auth_mana
 
     assert client.get("/_deliveries/jira").status_code == 404
     assert "?webhook=jira" not in client.get("/_ui/deliveries").text
-    auth_manager.is_authorized_connection.assert_not_called()
+    checked = {
+        call.kwargs["details"].conn_id for call in auth_manager.is_authorized_connection.call_args_list
+    }
+    assert "webhook_jira" not in checked
 
 
 @mock.patch.dict(

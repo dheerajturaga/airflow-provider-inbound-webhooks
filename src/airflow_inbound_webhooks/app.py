@@ -212,6 +212,18 @@ def warn_no_webhook_names() -> None:
     )
 
 
+@functools.cache
+def warn_any_webhook_name() -> None:
+    # Once per process, like warn_no_webhook_names.
+    log.warning(
+        "[%s] %s = %s is deprecated and will be removed in a later release: it serves any name, so every "
+        "delivery reads a connection. List the webhook names to serve instead",
+        configuration.SECTION,
+        configuration.WEBHOOK_NAMES,
+        configuration.ANY_WEBHOOK_NAME,
+    )
+
+
 def get_cached_resolution(name: str) -> ConfiguredWebhook | HTTPException | None:
     expires_at, resolution = resolved_webhooks.get(name, (0.0, None))
     return resolution if time.monotonic() < expires_at else None
@@ -227,6 +239,7 @@ def get_configured_webhook(name: str) -> ConfiguredWebhook:
     """
     names = get_webhook_names()
     if configuration.ANY_WEBHOOK_NAME in names:
+        warn_any_webhook_name()
         # Any name can be looked up, so a cache would keep an entry for every name anyone sends.
         return resolve_webhook(name)
     if name not in names:

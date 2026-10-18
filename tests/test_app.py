@@ -132,6 +132,7 @@ def forget_process_state() -> None:
     app.resolved_webhooks.clear()
     app.resolve_locks.clear()
     app.warn_no_webhook_names.cache_clear()
+    app.warn_any_webhook_name.cache_clear()
     app.rate_limit_buckets.clear()
     app.database_error_log.last = -math.inf
 
@@ -966,6 +967,17 @@ def test_unset_webhook_names_is_logged_once(client, caplog):
     warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert "webhook_names is not set" in warnings[0]
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="*")})
+def test_serving_any_webhook_name_is_deprecated(client, caplog):
+    for _ in range(2):
+        assert post_github(client).status_code == 202
+
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    # Once per process: a warning on every delivery would flood the log.
+    assert len(warnings) == 1
+    assert "webhook_names = * is deprecated" in warnings[0]
 
 
 @mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="github")})

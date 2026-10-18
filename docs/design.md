@@ -138,7 +138,7 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
 2. **Probing webhook names.** `webhook_names` and the connection cache bound what unauthenticated
    requests cost: an unlisted name is refused before any lookup, and each API server worker reads a
    listed webhook's connection at most once per `connection_cache_ttl`, even when the lookup or the
-   verification fails. With `*` nothing is cached, because the cache would keep an entry for
+   verification fails. With `*`, which is deprecated, nothing is cached, because the cache would keep an entry for
    every name anyone sends. A listed name still answers a bad signature with `401` rather than
    `404`, so which names are served can be probed. That is kept because the `404` is the main
    troubleshooting signal and names such as `github` are easy to guess; the secret is what protects

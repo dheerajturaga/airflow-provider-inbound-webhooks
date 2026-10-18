@@ -33,8 +33,10 @@ os.environ.update(
         "AIRFLOW__CORE__AUTH_MANAGER": (
             "airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager"
         ),
-        # Serve any webhook name, so each test can use the ones it needs; allowlist tests override it.
-        "AIRFLOW__INBOUND_WEBHOOKS__WEBHOOK_NAMES": "*",
+        # The webhook names the tests use; tests of the allowlist override it.
+        "AIRFLOW__INBOUND_WEBHOOKS__WEBHOOK_NAMES": (
+            "github,github_enterprise,gitlab,jira,deploybot,huggingface,bitbucket"
+        ),
     }
 )
 # Airflow 3.2 and later find the DB manager in the provider metadata, which the tests rely on there;
