@@ -18,7 +18,10 @@ CONNECTION_CACHE_TTL = "connection_cache_ttl"
 RATE_LIMIT_PER_MINUTE = "rate_limit_per_minute"
 DELIVERY_RETENTION = "delivery_retention"
 MAX_EVENT_PAYLOAD_BYTES = "max_event_payload_bytes"
+DAG_CHECKS = "dag_checks"
 ANY_WEBHOOK_NAME = "*"
+DAG_CHECKS_OFF = "off"
+DAG_CHECKS_ERROR = "error"
 DEFAULT_CONNECTION_CACHE_TTL = 60
 DEFAULT_DELIVERY_RETENTION_DAYS = 7
 # No limit, so Dags keep receiving the payloads they read; AIP-125 proposes 65536 for Airflow.
@@ -93,6 +96,24 @@ def build_config_section() -> dict[str, Any]:
                     "type": "integer",
                     "example": "65536",
                     "default": str(DEFAULT_MAX_EVENT_PAYLOAD_BYTES),
+                },
+                DAG_CHECKS: {
+                    "description": (
+                        f"{DAG_CHECKS_ERROR} refuses to load a Dag that uses a WebhookTopic in a way no "
+                        "delivery can serve: in a task's outlets or inlets, in a PartitionedAssetTimetable, "
+                        "or in a | condition with another topic that one delivery can also match. Its Dag "
+                        "file then shows an import error that says why, and every Dag in that file stops "
+                        "running, not only the refused one, so keep Dags that schedule on topics in files "
+                        f"of their own before turning the checks on. {DAG_CHECKS_OFF} checks nothing, and "
+                        "so does any other value, which is logged as a warning. It is read wherever Dag "
+                        "files are parsed, so set the same value on the Dag processor and the workers. "
+                        "There is no warning mode, because a warning raised while a Dag is checked reaches "
+                        "only the Dag processor's log, never the UI."
+                    ),
+                    "version_added": "0.2.0",
+                    "type": "string",
+                    "example": DAG_CHECKS_ERROR,
+                    "default": DAG_CHECKS_OFF,
                 },
             },
         }

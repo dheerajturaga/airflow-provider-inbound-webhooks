@@ -58,6 +58,7 @@ from airflow.models.asset import (  # noqa: E402
 from airflow.models.connection import Connection  # noqa: E402
 from airflow.models.dag import DagModel  # noqa: E402
 from airflow.models.dagbundle import DagBundleModel  # noqa: E402
+from airflow.models.errors import ParseImportError  # noqa: E402
 from airflow.models.log import Log  # noqa: E402
 from airflow.utils.session import create_session  # noqa: E402
 from sqlalchemy import delete, select  # noqa: E402
@@ -73,6 +74,7 @@ except ImportError:  # Airflow 3.1
 CLEARED_MODELS = (
     delivery_table,
     Log,
+    ParseImportError,
     AssetDagRunQueue,
     AssetEvent,
     DagScheduleAssetReference,
@@ -151,6 +153,27 @@ def parse_dag_file(tmp_path):
         return DagBag(dag_folder=str(path))
 
     return parse
+
+
+@pytest.fixture
+def registered_policy():
+    """Have Airflow call the package's cluster policy, as its entry point makes it once installed."""
+    from airflow import settings
+
+    from airflow_inbound_webhooks import policy
+
+    # Airflow 3.1 keeps the policy plugin manager in a module global.
+    if hasattr(settings, "get_policy_plugin_manager"):
+        manager = settings.get_policy_plugin_manager()
+    else:
+        manager = settings.POLICY_PLUGIN_MANAGER
+    # A package whose installed metadata predates the entry point has not been registered.
+    if manager.is_registered(policy):
+        yield
+        return
+    manager.register(policy)
+    yield
+    manager.unregister(policy)
 
 
 @pytest.fixture

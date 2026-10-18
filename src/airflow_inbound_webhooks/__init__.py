@@ -43,8 +43,9 @@ __all__ = [
 def __getattr__(name: str) -> Any:
     # WebhookTopic imports the Task SDK, and so Airflow, which initializes as it is imported. Only Dag
     # files need it, so importing the package alone, as running the test sender with python -m does,
-    # imports nothing from Airflow. Airflow's own processes save nothing by it: importing Airflow
-    # imports the Task SDK too.
+    # imports nothing from Airflow. Airflow's own processes save nothing by it, since importing
+    # Airflow imports the Task SDK too, but the cluster policy, which they all import, tells from
+    # sys.modules whether a Dag file has used WebhookTopic.
     if name == "WebhookTopic":
         from airflow_inbound_webhooks.topics import WebhookTopic
 

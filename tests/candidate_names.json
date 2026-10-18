@@ -122,6 +122,14 @@
     "github/my-org/*/push/feature/login",
     "github/*/push/feature/login"
   ],
+  "github-push-branch-named-release": [
+    "github/my-org/web/push",
+    "github/my-org/*/push",
+    "github/*/push",
+    "github/my-org/web/push/release",
+    "github/my-org/*/push/release",
+    "github/*/push/release"
+  ],
   "github-push-branch-deleted": [
     "github/my-org/web/push",
     "github/my-org/*/push",
