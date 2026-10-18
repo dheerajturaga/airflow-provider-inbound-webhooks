@@ -24,7 +24,12 @@ pytestmark = pytest.mark.usefixtures("clean_db")
 
 READER = object()
 NOW = datetime(2026, 10, 17, 12, tzinfo=timezone.utc)
-CONNECTION = json.dumps({"conn_type": "generic", "password": "s3cret"})
+CONNECTION = json.dumps({"conn_type": "inbound_webhook", "password": "s3cret"})
+TEAM_A_CONNECTION = {
+    "AIRFLOW_CONN_WEBHOOK_GITHUB": json.dumps(
+        {"conn_type": "inbound_webhook", "extra": {"team_name": "team_a"}}
+    )
+}
 
 
 @pytest.fixture(autouse=True)
@@ -74,10 +79,7 @@ def test_reading_needs_read_access_to_the_webhooks_connection(client, auth_manag
     )
 
 
-@mock.patch.dict(
-    os.environ,
-    {"AIRFLOW_CONN_WEBHOOK_GITHUB": json.dumps({"conn_type": "generic", "extra": {"team_name": "team_a"}})},
-)
+@mock.patch.dict(os.environ, TEAM_A_CONNECTION)
 def test_access_is_checked_for_the_team_of_the_webhooks_connection(client, auth_manager):
     client.get("/_deliveries/github")
 
@@ -97,10 +99,7 @@ def test_webhook_whose_connection_cannot_be_read_shows_nothing(client, auth_mana
     assert "webhook_jira" not in checked
 
 
-@mock.patch.dict(
-    os.environ,
-    {"AIRFLOW_CONN_WEBHOOK_GITHUB": json.dumps({"conn_type": "generic", "extra": {"team_name": "team_a"}})},
-)
+@mock.patch.dict(os.environ, TEAM_A_CONNECTION)
 def test_deliveries_attributed_to_another_team_are_not_shown(client, add_delivery):
     ours = add_delivery(team_name="team_a")
     theirs = add_delivery(team_name="team_b")

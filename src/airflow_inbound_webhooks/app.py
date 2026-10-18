@@ -31,6 +31,7 @@ from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError, Pro
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from airflow_inbound_webhooks import configuration
+from airflow_inbound_webhooks.connection_form import CONN_TYPE
 from airflow_inbound_webhooks.naming import build_candidate_names
 from airflow_inbound_webhooks.sources import (
     SOURCE_TYPES,
@@ -139,7 +140,22 @@ def resolve_webhook(name: str) -> ConfiguredWebhook:
         conn = Connection.get(f"{CONN_ID_PREFIX}{name}")
     except AirflowNotFoundException:
         raise HTTPException(HTTPStatus.NOT_FOUND, "Unknown webhook") from None
+    if conn.conn_type != CONN_TYPE:
+        warn_connection_type(f"{CONN_ID_PREFIX}{name}", conn.conn_type)
     return configure_webhook(name, conn)
+
+
+@functools.cache
+def warn_connection_type(conn_id: str, conn_type: str | None) -> None:
+    # Once per process and connection type: the connection is read again every connection_cache_ttl.
+    log.warning(
+        "Webhook connection %s has the type %s, which is deprecated: a later release will only serve "
+        "connections of type %s. Change the connection's type to %s",
+        conn_id,
+        conn_type or "none",
+        CONN_TYPE,
+        CONN_TYPE,
+    )
 
 
 def configure_webhook(name: str, conn: Any) -> ConfiguredWebhook:

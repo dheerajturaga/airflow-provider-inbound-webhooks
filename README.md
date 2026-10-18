@@ -641,10 +641,10 @@ More examples, for GitHub labels and pushes, organization-wide releases and GitL
 ### Connection
 
 One connection per webhook, named `webhook_<name>`, where `<name>` is lowercase letters, digits,
-`-` and `_`. Use the connection type **Inbound Webhook** (`inbound_webhook`) to get a form in the
-Airflow UI; its fields are stored in the connection extra under the keys below. The plugin reads
-connections of any type, so connections created elsewhere, for example from environment variables,
-work too. Fields left empty are treated as unset.
+`-` and `_`. Its type is **Inbound Webhook** (`inbound_webhook`), which has a form in the Airflow
+UI; the form's fields are stored in the connection extra under the keys below. Connections of other
+types still work, but are deprecated: the API server logs a warning, `airflow webhooks check`
+reports them, and a later release will refuse them. Fields left empty are treated as unset.
 
 | Form field | Extra key | Meaning |
 |---|---|---|
@@ -655,8 +655,9 @@ work too. Fields left empty are treated as unset.
 | Stored payload | `store_payload` | What asset events and the delivery record keep of each delivery: `full`, the body as received; `summary`, which only `jira` has, and which keeps the whole payload on any other source type, as it did before 0.2; or `none`. Defaults to `summary` for `jira` and `full` otherwise. |
 | Other fields | | Options of the source type, listed above |
 
-Connections stored in Airflow's metadata database, in environment variables
-(`AIRFLOW_CONN_WEBHOOK_<NAME>`) or in a secrets backend all work.
+Connections stored in Airflow's metadata database, in environment variables or in a secrets backend
+all work. In an environment variable, give the type in JSON:
+`AIRFLOW_CONN_WEBHOOK_GITHUB='{"conn_type": "inbound_webhook", "password": "<secret>"}'`.
 
 ### Configuration
 

@@ -44,7 +44,8 @@ The plugin never creates Dag runs; Airflow's own asset scheduling does.
 
 The package is also an Airflow provider: an `apache_airflow_provider` entry point returns its
 metadata, which registers the `inbound_webhook` connection type with `InboundWebhookHook`. The hook
-only anchors the form; the endpoint reads connections itself.
+only anchors the form; the endpoint reads connections itself. It still serves connections of other
+types, as 0.1 did, but logs a deprecation warning: AIP-125 serves only `inbound_webhook` connections.
 
 Airflow builds connection forms differently across the supported versions, so
 `connection_form.py` defines the fields once and renders both formats:

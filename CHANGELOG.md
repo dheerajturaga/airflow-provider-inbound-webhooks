@@ -71,6 +71,10 @@ breaking change, listed under "Changed event names" with the old and new names.
 - `[inbound_webhooks] webhook_names = *`, which serves any name and so reads a connection on every
   delivery. It logs a warning once per API server worker and will be removed in a later release:
   list the webhook names to serve instead.
+- Webhook connections whose type is not `inbound_webhook`, such as `generic` connections from
+  environment variables. The API server logs a warning once per worker and connection,
+  `airflow webhooks check` reports them, and a later release will refuse them: set the connection's
+  type to `inbound_webhook`.
 
 ## 0.1.0 - 2026-10-14
 
