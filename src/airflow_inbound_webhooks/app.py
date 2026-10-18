@@ -16,6 +16,7 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -68,9 +69,11 @@ UNAVAILABLE_RETRY_AFTER_SECONDS = 30
 # The tag value metrics give webhook names that are not listed, so random names add no metric series.
 UNLISTED_WEBHOOK_TAG = "other"
 # register_asset_change accepts and drops unknown keyword arguments, so an argument a later Airflow
-# renamed would be lost silently instead of failing. The team arguments only exist from Airflow 3.3.
+# renamed would be lost silently instead of failing. The team arguments and callback_sink only exist
+# from Airflow 3.3.
 REQUIRED_ASSET_CHANGE_ARGUMENTS = frozenset({"asset", "extra", "session"})
 TEAM_ATTRIBUTION_ARGUMENTS = frozenset({"source_is_api", "api_user_teams"})
+CALLBACK_SINK_ARGUMENT = "callback_sink"
 
 
 @functools.cache
@@ -94,6 +97,11 @@ def get_asset_change_arguments() -> frozenset[str]:
 
 def supports_team_attribution() -> bool:
     return get_asset_change_arguments() >= TEAM_ATTRIBUTION_ARGUMENTS
+
+
+def supports_callback_sink() -> bool:
+    """Return whether ``register_asset_change`` can hand back its listener notifications to run later."""
+    return CALLBACK_SINK_ARGUMENT in get_asset_change_arguments()
 
 
 @functools.cache
@@ -536,6 +544,16 @@ def build_event_extra(
     }
 
 
+def notify_listeners(webhook: ConfiguredWebhook, notifications: list[Callable[[], None]]) -> None:
+    """Send the asset listener notifications ``register_asset_change`` handed back, in order."""
+    for notify in notifications:
+        try:
+            notify()
+        except Exception:
+            # The delivery is committed by now, and is answered as recorded whatever a listener does.
+            log.exception("Webhook %s: an asset listener failed", webhook.name)
+
+
 def build_response(
     delivery_id: str | None, outcome: str, asset_events: dict[str, int], candidates: list[str]
 ) -> dict[str, Any]:
@@ -569,6 +587,12 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
         if supports_team_attribution()
         else {}
     )
+    # Collected rather than sent from inside the transaction, so listeners only hear of events that are
+    # committed. Airflow 3.1 and 3.2 always send them from inside it.
+    notifications: list[Callable[[], None]] = []
+    sink_arguments: dict[str, Any] = (
+        {CALLBACK_SINK_ARGUMENT: notifications} if supports_callback_sink() else {}
+    )
     asset_events: dict[str, int] = {}
     try:
         # Leaving the block commits, so a delivery is only acknowledged once its events and its row are
@@ -589,7 +613,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
             subscribed, only_paused_subscribers = find_subscribed_assets(session, candidates)
             for asset_model in subscribed:
                 asset_event = asset_manager.register_asset_change(
-                    asset=asset_model, extra=extra, session=session, **team_arguments
+                    asset=asset_model, extra=extra, session=session, **team_arguments, **sink_arguments
                 )
                 if asset_event is not None:
                     asset_events[asset_model.name] = asset_event.id
@@ -629,7 +653,8 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
                 result = session.execute(
                     update(delivery_table)
                     .where(delivery_table.c.id == original.id, delivery_table.c.outcome != ACCEPTED)
-                    .values(**recorded)
+                    # The team its events are attributed to now, which decides who may read the row.
+                    .values(**recorded, team_name=webhook.team_name)
                 )
                 if cast("CursorResult[Any]", result).rowcount != 1:
                     raise RecordedMeanwhile
@@ -641,6 +666,8 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
         if original is None:
             raise
         return build_response(event.delivery_id, DUPLICATE, original.asset_events, original.candidates)
+    # Only now: the copy that lost a race, and a delivery whose commit failed, notify no one.
+    notify_listeners(webhook, notifications)
     if not asset_events:
         # Debug only: a webhook that sends every event would otherwise log most deliveries.
         log.debug("Webhook %s: no Dag schedules on any of its candidates %s", webhook.name, candidates)

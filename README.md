@@ -625,7 +625,7 @@ Besides `payload`, `extra` holds:
 | `source_type` | The connection's source type, such as `github` |
 | `path` | Where the event happened, as in its names |
 | `delivery_id` | The service's ID for the delivery, where it sends one |
-| `inbound_delivery_id` | The ID of the delivery's [record](#delivery-records), set even when the service sends no delivery ID. `GET /webhooks/_deliveries/<webhook>/<inbound_delivery_id>` returns the record |
+| `inbound_delivery_id` | The ID of the delivery's [record](#delivery-records), set even when the service sends no delivery ID. While the record is kept (`delivery_retention`), the deliveries page and API find it by this ID, for Airflow users allowed to read the webhook's connection, which a task is not; see [Reading deliveries](#reading-deliveries) |
 | `correlation_key` | `null`: no source type sets one yet |
 
 Anyone allowed to create asset events, through the REST API or the UI, can create one with the same
@@ -749,6 +749,13 @@ The tags need a metrics backend that keeps them: OpenTelemetry (`[metrics] otel_
 `statsd_datadog_enabled` or `statsd_influxdb_enabled`. Plain StatsD drops tags, so it counts the
 deliveries of every webhook and outcome together.
 
+On Airflow 3.3 and later, Airflow's asset listeners (`on_asset_changed`, `on_asset_event_emitted`)
+hear of a delivery's asset events once the delivery is committed, so never of events that are rolled
+back. On 3.1 and 3.2, Airflow notifies them while it records each event, inside the delivery's
+transaction: a listener can hear of an event that is then rolled back, when the commit fails or when
+a copy of the delivery arrives while another is being recorded and is answered as a duplicate. A
+listener that fails is logged, and the delivery is answered as it would be without it.
+
 ### Responses and troubleshooting
 
 `airflow webhooks check <name>` reports what would happen to a webhook's deliveries, and why they
@@ -828,8 +835,8 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 | Airflow | Support |
 |---|---|
 | 3.3 and later | Supported, including `team_name` |
-| 3.2 | Supported; `team_name` is rejected because this version cannot attribute asset events to a team |
-| 3.1.1 to 3.1.x | Supported, without `team_name`, as on 3.2. `airflow db migrate` only runs the DB managers `[database] external_db_managers` names, so add the plugin's before creating or upgrading its table: `external_db_managers = airflow_inbound_webhooks.db.WebhooksDBManager`, or `AIRFLOW__DATABASE__EXTERNAL_DB_MANAGERS` in the environment. Separate several managers with commas and no spaces, which 3.1 does not strip. On 3.1.1 and 3.1.2 the connection form only shows its fields when Flask-AppBuilder is installed (for example with the FAB provider); otherwise set the fields as JSON in the connection's extra. On later 3.1 patches with Python 3.10, fields with a fixed set of values, such as *Source type*, show as text boxes unless Flask-AppBuilder is installed; their descriptions list the values |
+| 3.2 | Supported; `team_name` is rejected because this version cannot attribute asset events to a team, and asset listeners are notified before the delivery is committed (see [Audit log and metrics](#audit-log-and-metrics)) |
+| 3.1.1 to 3.1.x | Supported, without `team_name` and with asset listeners notified before the commit, as on 3.2. `airflow db migrate` only runs the DB managers `[database] external_db_managers` names, so add the plugin's before creating or upgrading its table: `external_db_managers = airflow_inbound_webhooks.db.WebhooksDBManager`, or `AIRFLOW__DATABASE__EXTERNAL_DB_MANAGERS` in the environment. Separate several managers with commas and no spaces, which 3.1 does not strip. On 3.1.1 and 3.1.2 the connection form only shows its fields when Flask-AppBuilder is installed (for example with the FAB provider); otherwise set the fields as JSON in the connection's extra. On later 3.1 patches with Python 3.10, fields with a fixed set of values, such as *Source type*, show as text boxes unless Flask-AppBuilder is installed; their descriptions list the values |
 | 3.0, 3.1.0 | Not supported: their API server cannot read metadata-database connections through `airflow.sdk.Connection`, and installing next to them is refused |
 | 2.x | Not supported: there is no FastAPI API server for the plugin to mount on |
 

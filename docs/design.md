@@ -34,12 +34,18 @@ documentation is in the [README](../README.md).
    schedule on it, and the delivery's row is inserted, or for a redelivery updated. Every event's
    `extra` holds the row's `id` as `inbound_delivery_id`, which the endpoint chooses before it
    records the events, so an event leads back to its delivery even when the sender sends no delivery
-   ID; a redelivery's events hold the `id` of the row it updates. The endpoint commits its own
-   database session before responding, so `accepted` means the events and the row are stored. A
-   copy of the delivery that arrives while the first is being recorded fails on the unique
-   constraint, or for a redelivery on an update that only matches a row with no events, which rolls
-   back its events, and it is answered from the first copy's row. A database that cannot be used, or
-   lacks the delivery table, is a `503` with `Retry-After`, logged at most once a minute.
+   ID; a redelivery's events hold the `id` of the row it updates, which takes the team they are
+   attributed to now. The endpoint commits its own database session before responding, so
+   `accepted` means the events and the row are stored. A copy of the delivery that arrives while the
+   first is being recorded fails on the unique constraint, or for a redelivery on an update that
+   only matches a row with no events, which rolls back its events, and it is answered from the first
+   copy's row. A database that cannot be used, or lacks the delivery table, is a `503` with
+   `Retry-After`, logged at most once a minute.
+9. Once the transaction has committed, the endpoint sends the asset listener notifications that
+   `register_asset_change` handed back through `callback_sink`, so listeners hear only of events
+   that are stored. One that fails is logged, and the delivery is still answered as recorded.
+   Airflow 3.1 and 3.2 have no `callback_sink` and notify listeners inside the transaction, so there
+   a listener can hear of events that are rolled back, such as those of a copy that lost the race.
 
 The plugin never creates Dag runs; Airflow's own asset scheduling does.
 
@@ -109,7 +115,7 @@ listing those with stored deliveries would mean a `DISTINCT` over the whole tabl
 
 | Dependency | Why | Risk |
 |---|---|---|
-| `airflow.assets.manager.asset_manager.register_asset_change` | Records the asset event and queues Dags exactly as Airflow does | Its signature changed in 3.2 and 3.3, and it accepts and drops unknown keyword arguments, so a renamed argument would be lost silently. The endpoint inspects `AssetManager.register_asset_change`: deliveries fail with a `500` if `asset`, `extra` or `session` is no longer a named parameter, and `source_is_api` and `api_user_teams` are passed only where they are (3.3 and later). A deployment can replace the manager with `[core] asset_manager_class`; the check reads Airflow's own class, so a replacement that forwards `**kwargs` still works. |
+| `airflow.assets.manager.asset_manager.register_asset_change` | Records the asset event and queues Dags exactly as Airflow does | Its signature changed in 3.2 and 3.3, and it accepts and drops unknown keyword arguments, so a renamed argument would be lost silently. The endpoint inspects `AssetManager.register_asset_change`: deliveries fail with a `500` if `asset`, `extra` or `session` is no longer a named parameter, and `source_is_api`, `api_user_teams` and `callback_sink` are passed only where they are (3.3 and later). A deployment can replace the manager with `[core] asset_manager_class`; the check reads Airflow's own class, so a replacement that forwards `**kwargs` still works. |
 | `airflow.models.asset.AssetModel` | Finds which candidate names are active assets | Database models are internal; a relationship was renamed in 3.1 |
 | `DagModel`, `DagScheduleAssetReference`, `DagScheduleAssetNameReference` and `DagScheduleAssetUriReference` | Find the Dags that schedule on a candidate, and whether they are stale, paused or draining | Internal. `DagModel.is_draining` only exists from 3.4, so the query uses it only where it exists |
 | `airflow.utils.session.create_session` | A database session the endpoint commits before it responds | Same signature in every supported version. It is what the API server's own `SessionDep` wraps; `SessionDep` is marked private and commits in dependency cleanup, whose timing depends on FastAPI (Airflow pins it with `scope="function"` from 3.2). |
