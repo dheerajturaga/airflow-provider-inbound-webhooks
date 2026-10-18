@@ -102,16 +102,24 @@ def as_utc(moment: datetime) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
-def of_webhook(name: str, team: str | None) -> ColumnElement[bool]:
-    """Match a webhook's deliveries that were attributed to ``team``, the team the reader may read."""
+def of_webhook(name: str, team: str | None, *, every_team: bool = False) -> ColumnElement[bool]:
+    """Match a webhook's deliveries attributed to ``team``, or with ``every_team`` all of them."""
     from airflow_inbound_webhooks.models import delivery_table
 
     columns = delivery_table.c
+    if every_team:
+        return columns.webhook == name
     return and_(columns.webhook == name, columns.team_name == team if team else columns.team_name.is_(None))
 
 
 def list_rows(
-    name: str, team: str | None, limit: int, before: datetime | None = None, before_id: str | None = None
+    name: str,
+    team: str | None,
+    limit: int,
+    before: datetime | None = None,
+    before_id: str | None = None,
+    *,
+    every_team: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Return a webhook's deliveries, newest first and without their payloads.
@@ -124,7 +132,9 @@ def list_rows(
     from airflow_inbound_webhooks.models import delivery_table
 
     columns = delivery_table.c
-    query = select(*(column for column in columns if column.name != "payload")).where(of_webhook(name, team))
+    query = select(*(column for column in columns if column.name != "payload")).where(
+        of_webhook(name, team, every_team=every_team)
+    )
     if before is not None:
         before = as_utc(before)
         query = query.where(
@@ -139,12 +149,16 @@ def list_rows(
         return [row._asdict() for row in session.execute(query)]
 
 
-def find_row(name: str, team: str | None, delivery: str) -> dict[str, Any] | None:
+def find_row(
+    name: str, team: str | None, delivery: str, *, every_team: bool = False
+) -> dict[str, Any] | None:
     from airflow.utils.session import create_session
 
     from airflow_inbound_webhooks.models import delivery_table
 
-    query = select(delivery_table).where(of_webhook(name, team), delivery_table.c.id == delivery)
+    query = select(delivery_table).where(
+        of_webhook(name, team, every_team=every_team), delivery_table.c.id == delivery
+    )
     with create_session(scoped=False) as session:
         row = session.execute(query).one_or_none()
     return None if row is None else row._asdict()
