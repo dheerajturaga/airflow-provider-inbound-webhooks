@@ -70,6 +70,17 @@ LABELED = {
 }
 
 
+def measure(payload: dict) -> int:
+    """Return a payload's size as max_event_payload_bytes counts it: compact JSON, in bytes of UTF-8."""
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode())
+
+
+# Its characters, its bytes of UTF-8 and its size with non-ASCII characters escaped all differ, so the
+# limits around PREVIEW_SIZE that tests set hold only for bytes of UTF-8.
+PREVIEW = {**LABELED, "pull_request": {"title": "Aperçu ☕"}}
+PREVIEW_SIZE = measure(PREVIEW)
+
+
 def post_github(
     client: TestClient,
     payload: dict = LABELED,
@@ -250,6 +261,7 @@ def test_github_label_triggers_only_subscribed_dags(client, session, subscribe):
         "inbound_delivery_id": delivery.id,
         "correlation_key": None,
         "payload": LABELED,
+        "payload_truncated": False,
     }
 
 
@@ -376,6 +388,7 @@ def test_jira_transition_stores_issue_summary(client, session, subscribe):
         "inbound_delivery_id": delivery.id,
         "correlation_key": None,
         "payload": {**payload, "issue": {"key": "OPS-42", "fields": {"project": {"key": "OPS"}}}},
+        "payload_truncated": False,
     }
 
 
@@ -427,6 +440,73 @@ def test_jira_stores_the_whole_issue_when_asked(client, session, subscribe):
     )
 
     assert session.scalars(select(AssetEvent.extra)).one()["payload"] == payload
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+@pytest.mark.parametrize(
+    ("max_event_payload_bytes", "copied"),
+    [
+        pytest.param(PREVIEW_SIZE + 1, True, id="under"),
+        pytest.param(PREVIEW_SIZE, True, id="at"),
+        pytest.param(PREVIEW_SIZE - 1, False, id="over"),
+        pytest.param(0, True, id="zero-copies-every-payload"),
+        pytest.param(-1, True, id="negative-as-zero"),
+    ],
+)
+def test_events_copy_the_payload_up_to_max_event_payload_bytes(
+    client, session, subscribe, max_event_payload_bytes, copied
+):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    with mock.patch.dict(os.environ, build_config_env(max_event_payload_bytes=str(max_event_payload_bytes))):
+        assert post_github(client, PREVIEW).json()["outcome"] == "accepted"
+
+    extra = session.scalars(select(AssetEvent.extra)).one()
+    assert (extra["payload"], extra["payload_truncated"]) == ((PREVIEW, False) if copied else (None, True))
+    # The delivery's record keeps the payload either way.
+    assert [delivery.payload for delivery in get_deliveries(session)] == [PREVIEW]
+
+
+@mock.patch.dict(
+    os.environ,
+    {**build_conn_env("github", store_payload="none"), **build_config_env(max_event_payload_bytes="1")},
+)
+def test_payload_the_connection_does_not_store_is_not_reported_as_truncated(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    post_github(client)
+
+    extra = session.scalars(select(AssetEvent.extra)).one()
+    assert (extra["payload"], extra["payload_truncated"]) == (None, False)
+
+
+@mock.patch.dict(os.environ, build_conn_env("jira"))
+def test_jira_payload_is_measured_by_its_summary(client, session, subscribe):
+    subscribe("new_bugs", "jira/OPS/issue_created")
+    payload = {
+        "webhookEvent": "jira:issue_created",
+        "issue": {"key": "OPS-1", "fields": {"project": {"key": "OPS"}, "description": "A long description"}},
+    }
+    summary = {**payload, "issue": {"key": "OPS-1", "fields": {"project": {"key": "OPS"}}}}
+    body = json.dumps(payload).encode()
+
+    with mock.patch.dict(os.environ, build_config_env(max_event_payload_bytes=str(measure(summary)))):
+        client.post(
+            "/jira",
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "X-Hub-Signature": f"sha256={hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()}",
+            },
+        )
+
+    assert session.scalars(select(AssetEvent.extra)).one()["payload"] == summary
+
+
+@mock.patch.dict(os.environ, build_config_env(max_event_payload_bytes="1"))
+def test_payload_holding_a_lone_surrogate_can_be_measured():
+    # json reads an escaped lone surrogate from a body, though UTF-8 cannot encode one.
+    assert app.exceeds_max_event_payload_bytes(json.loads(r'{"title": "\ud800"}'))
 
 
 @mock.patch.dict(os.environ, DEPLOYBOT_CONN)

@@ -591,7 +591,7 @@ and `parse()`; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Schedule on an event name and read the delivery from `triggering_asset_events`. Each event's
 `extra` holds the payload, or for Jira a summary of it, unless the connection's `store_payload`
-says otherwise:
+says otherwise or the payload is larger than [`max_event_payload_bytes`](#configuration):
 
 ```python
 from airflow.sdk import Asset, dag, task
@@ -627,6 +627,7 @@ Besides `payload`, `extra` holds:
 | `delivery_id` | The service's ID for the delivery, where it sends one |
 | `inbound_delivery_id` | The ID of the delivery's [record](#delivery-records), set even when the service sends no delivery ID. While the record is kept (`delivery_retention`), the deliveries page and API find it by this ID, for Airflow users allowed to read the webhook's connection, which a task is not; see [Reading deliveries](#reading-deliveries) |
 | `correlation_key` | `null`: no source type sets one yet |
+| `payload_truncated` | `true` if the payload was larger than `max_event_payload_bytes` and left out, so `payload` is `null`; otherwise `false`. The delivery record keeps the payload, so the deliveries page and `GET /webhooks/_deliveries/<webhook>/<inbound_delivery_id>` show it |
 
 Anyone allowed to create asset events, through the REST API or the UI, can create one with the same
 keys, so `from_webhook` says where an event claims to come from, not that a service sent it. Read the
@@ -670,6 +671,7 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
 | `webhook_names` | empty | Comma-separated names of the webhooks to serve, such as `github,jira`. Requests for any other name are answered with `404` without looking up a connection. Empty serves no webhook, and the API server log says so once. `*` serves any name and reads its connection on every delivery, which lets anyone who can reach the endpoint make a call to your secrets backend; it is deprecated, logs a warning, and will be removed in a later release. Changes need an API server restart. |
 | `connection_cache_ttl` | `60` | Seconds a listed webhook's connection is reused before it is read again, including a missing or misconfigured one. A changed option takes up to this long to apply. A delivery that fails verification has the connection read again, at most once per this period, so a secret changed in the connection applies to the first delivery signed with it. `0` reads the connection on every delivery. |
 | `delivery_retention` | `7` | Days of delivery records that `airflow webhooks clean` keeps unless told otherwise. Keep it longer than any of your services retries a delivery: a retry that comes after its first delivery's record is deleted is recorded again. |
+| `max_event_payload_bytes` | `0` | Bytes of the largest payload copied into a delivery's asset events, measured as compact JSON in UTF-8 after `store_payload`, so for `jira` the summary is measured. A larger payload is left out: the events have `payload` `null` and `payload_truncated` `true`. The delivery record keeps the payload, so the deliveries page and API still show it. `0` copies every payload. AIP-125 proposes `65536` as Airflow's default. |
 | `rate_limit_per_minute` | `0` | Verified deliveries each API server worker records per webhook and minute; more are answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification do not count, so they cannot use the limit up. Each worker counts on its own, so N workers record up to N times as many. GitLab disables a webhook after four failed deliveries in a row, `429` included, so set the limit above what a GitLab webhook sends. `0` turns the limit off. |
 
 ### Delivery records
@@ -677,7 +679,8 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
 Every verified delivery is stored in the table `inbound_webhooks_delivery` of Airflow's metadata
 database, in the transaction that records its asset events. The table records the webhook, the
 sender's delivery ID, when the delivery arrived, the names it offered and the asset events it
-recorded. When it recorded any, the row also keeps its payload, as `store_payload` keeps it.
+recorded. When it recorded any, the row also keeps its payload, as `store_payload` keeps it, even
+one that `max_event_payload_bytes` leaves out of the asset events.
 
 A retry repeats a delivery's ID and its body. It gets the answer the delivery got, with status `200`
 and `outcome` `duplicate`, and records nothing. A redelivery of a delivery that recorded nothing is
@@ -856,8 +859,8 @@ From 0.1.0 the project follows [Semantic Versioning](https://semver.org/) for it
   `[inbound_webhooks]` configuration options;
 - [event names](#event-names);
 - each asset event's `extra`: the keys `from_webhook`, `webhook`, `source_type`, `source`, `path`,
-  `delivery_id`, `inbound_delivery_id`, `correlation_key` and `payload`, and for `jira` the issue
-  fields its summary keeps.
+  `delivery_id`, `inbound_delivery_id`, `correlation_key`, `payload` and `payload_truncated`, and
+  for `jira` the issue fields its summary keeps.
 
 Below 1.0, a change that breaks any of them ships only in a new minor version, and the
 [changelog](CHANGELOG.md) describes it. The Python modules are not a public interface yet: code that
@@ -868,8 +871,8 @@ response's `detail` or in the API server log, nor the deliveries page and API.
 
 - No replay protection: retries are recognised by their delivery ID, deliberate replays are not,
   except for `hmac_json` services whose delivery ID is in the body.
-- Each recorded asset event stores the delivery's payload, unless `store_payload` says otherwise,
-  and anyone who can read asset events can see it.
+- Each recorded asset event stores the delivery's payload, unless `store_payload` or
+  `max_event_payload_bytes` says otherwise, and anyone who can read asset events can see it.
 - Delivery records are only deleted by `airflow webhooks clean`, which needs to be scheduled.
 - Renaming a repository, project or service changes its event names, so Dags must be updated.
 - The plugin uses some Airflow internals (`asset_manager`, `AssetModel`, `create_session`,

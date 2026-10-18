@@ -522,10 +522,21 @@ def build_audit_log(webhook: ConfiguredWebhook, event: WebhookEvent, asset_event
     return entry
 
 
+def exceeds_max_event_payload_bytes(payload: dict[str, Any] | None) -> bool:
+    """Return whether a payload, as compact JSON in UTF-8, is larger than ``max_event_payload_bytes``."""
+    limit = conf.getint(configuration.SECTION, configuration.MAX_EVENT_PAYLOAD_BYTES, fallback=0)
+    if payload is None or limit <= 0:
+        return False
+    # surrogatepass: json reads an escaped lone surrogate, such as "\ud800", which UTF-8 cannot encode.
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(errors="surrogatepass")
+    return len(encoded) > limit
+
+
 def build_event_extra(
     webhook: ConfiguredWebhook, event: WebhookEvent, payload: dict[str, Any] | None, record_id: str
 ) -> dict[str, Any]:
     """Return the ``extra`` of each asset event a delivery records; ``record_id`` is its row's ID."""
+    truncated = exceeds_max_event_payload_bytes(payload)
     return {
         # Set here, as Airflow sets from_rest_api, so Dags can tell webhook events apart. Anyone allowed to
         # create asset events can set it too, so it marks where an event says it came from, not proof.
@@ -540,7 +551,10 @@ def build_event_extra(
         # together with the body.
         "inbound_delivery_id": record_id,
         "correlation_key": event.correlation_key,
-        "payload": payload,
+        # Left out of the events only: the delivery's row keeps it.
+        "payload": None if truncated else payload,
+        # Always set, so Dags can test it rather than whether the key exists.
+        "payload_truncated": truncated,
     }
 
 
@@ -609,6 +623,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
             # Chosen before the row is written, because every event carries it. A redelivery updates the
             # row of the delivery it repeats.
             record_id = str(uuid.uuid4()) if original is None else original.id
+            # One for every event, so the payload is measured once.
             extra = build_event_extra(webhook, event, payload, record_id)
             subscribed, only_paused_subscribers = find_subscribed_assets(session, candidates)
             for asset_model in subscribed:

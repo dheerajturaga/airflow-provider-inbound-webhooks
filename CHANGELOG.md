@@ -42,6 +42,10 @@ breaking change, listed under "Changed event names" with the old and new names.
 - `[inbound_webhooks] rate_limit_per_minute`, off by default: verified deliveries over it are
   answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification
   do not count, and each API server worker counts on its own.
+- `[inbound_webhooks] max_event_payload_bytes`, off by default; AIP-125 proposes 65536 for Airflow.
+  A payload larger than it, as compact JSON, is left out of the delivery's asset events, whose
+  `extra` then has `payload` `null` and `payload_truncated` `true`; the delivery record keeps it.
+  Every event's `extra` has `payload_truncated`, which is `false` unless the payload was left out.
 
 ### Changed
 
