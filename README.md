@@ -821,8 +821,10 @@ that batches, as every `[a, b]` or `a & b` schedule does, or of any Dag before 3
 several deliveries. With `max_active_runs` above 1, runs overlap and can finish in any order.
 
 **Manual runs:** a run started by hand, such as with `airflow dags trigger`, carries no events:
-`triggering_asset_events[asset]` is an empty list there, so check for an event in a task that needs
-one. Runs that deliveries start have an empty `dag_run.conf`; the delivery is only in the events.
+`triggering_asset_events[asset]` is an empty list there, so a task that needs an event checks that
+the list is not empty, as `examples/dags/ci_cd.py` does; `asset in triggering_asset_events` is true
+even then. Runs that deliveries start have an empty `dag_run.conf`; the delivery is only in the
+events.
 
 ## Reference
 
@@ -968,7 +970,7 @@ asset events it recorded; see [Reading deliveries](#reading-deliveries).
 | Status | Meaning | What to check |
 |---|---|---|
 | `200` `duplicate` | A retry of a delivery that recorded asset events: nothing is recorded again, not even for a Dag that has subscribed to one of its names since | Nothing, if the sender sent the delivery again. To try a Dag that subscribed since, trigger a new event rather than redelivering this one |
-| `202` `accepted` | Recorded: an asset event on each subscribed name, which the delivery's page lists | If no Dag run starts, check that the scheduler is running. Before Airflow 3.4, a delivery that arrives while its Dag is already queued only runs with a later delivery; see [When Dags run](#when-dags-run) |
+| `202` `accepted` | Recorded: an asset event on each subscribed name, which the delivery's page lists | If no Dag run starts, check that the scheduler is running. Before Airflow 3.4, a delivery on a name its Dag is already queued for, such as one that arrives while the Dag waits at `max_active_runs`, runs only with a later delivery; see [When Dags run](#when-dags-run) |
 | `202` `no_subscribers` | Verified, but no Dag schedules on any of the names it offered, so no asset event is recorded | The Dag schedules on one of the names the delivery's page lists, and has been parsed: `airflow dags reserialize` parses it now. The API server also logs the names at debug level |
 | `202` `dag_paused` | Verified, but every Dag that schedules on one of its names is paused (or, on Airflow 3.4 and later, draining), so no asset event is recorded | Unpause the Dag, then redeliver the delivery: unpausing queues nothing, and a delivery that recorded nothing is processed again |
 | `400` | The body is not a JSON object, holds `NaN` or `Infinity`, which JSON does not allow, or a number too large to store, such as `1e400`, or nests objects and arrays more than 64 levels deep; or the event name is missing, or the delivery ID is longer than 255 characters | GitHub: the content type is `application/json`. Jira: *Exclude body* is unchecked |

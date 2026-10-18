@@ -11,6 +11,7 @@ from unittest import mock
 
 import pytest
 from airflow.sdk import Asset
+from airflow.sdk.execution_time.context import TriggeringAssetEventsAccessor
 
 ROOT = Path(__file__).parents[1]
 EXAMPLE_DAGS = sorted((ROOT / "examples" / "dags").glob("*.py"))
@@ -55,6 +56,16 @@ def test_example_dag_file_passes_the_topic_checks(parse_dag_file, path):
 
     assert bag.import_errors == {}
     assert bag.dags
+
+
+@pytest.mark.parametrize("path", EXAMPLE_DAGS, ids=[path.name for path in EXAMPLE_DAGS])
+def test_example_dag_tasks_handle_a_run_started_by_hand(parse_dag_file, path):
+    tasks = [task for dag in parse_dag_file(path.read_text()).dags.values() for task in dag.tasks]
+
+    # A run started by hand carries no asset events: each task copes rather than fails.
+    assert tasks
+    for task in tasks:
+        task.python_callable(triggering_asset_events=TriggeringAssetEventsAccessor.build([]))
 
 
 def test_readme_quick_start_writes_the_example_dag():
