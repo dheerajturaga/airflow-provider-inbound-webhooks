@@ -37,8 +37,8 @@ class WebhookTopic(Asset):
     ``path``, ``action`` and ``detail`` are optional; an event without an action, such as GitHub's
     ``push``, takes its detail right after it (``event="push", detail="main"``). A path can hold
     several segments, with ``*`` in place of trailing ones, as in ``my-org/*`` or ``*``, and nowhere
-    else: to match any action or detail, leave it out. Or give the whole name, as a delivery's
-    ``candidates`` list it, which also spells out a path that holds a literal ``*``:
+    else: to match any action or detail, leave it out. Or give the whole name, as a delivery's record
+    lists the names it offered, which also spells out a path that holds a literal ``*``:
     ``WebhookTopic("github/my-org/web/pull_request/labeled/deploy-preview")``. A name no delivery can
     offer is refused.
 
@@ -114,7 +114,7 @@ def check_name(name: str) -> None:
         raise ValueError(f"{message}. Did you mean {suggestion!r}?")
     raise ValueError(
         f"{message}. Build it from its segments with the keywords, as the endpoint builds names, or copy "
-        "it from a delivery's candidates"
+        "it from the names a delivery offered, on its page under Browse > Webhook deliveries"
     )
 
 
