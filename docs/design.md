@@ -99,9 +99,9 @@ change to the table needs a model change and a migration that agree.
 
 `deliveries.py` serves the delivery records under `/webhooks/_deliveries` as JSON and under
 `/webhooks/_ui` as a page, which the plugin adds to the UI's Browse menu as an external view. The UI
-frames the page from that view's `href`, sandboxed without scripts, so the page is plain HTML with
-links and runs no script. Its `href` carries the path of `[api] base_url`, as Airflow derives its own
-root path.
+frames the page from that view's `href`, in a frame that allows scripts and forms. The page runs
+none anyway: it is plain HTML with links and forms, and its Content-Security-Policy lets it load
+nothing. Its `href` carries the path of `[api] base_url`, as Airflow derives its own root path.
 
 Plugin apps are mounted without Airflow's authorization, so these routes check the login themselves:
 Airflow's `get_user` takes a bearer token or the UI's session cookie, and the auth manager decides
