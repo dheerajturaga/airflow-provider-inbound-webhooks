@@ -18,6 +18,8 @@ metadata = MetaData(schema=_get_schema(), naming_convention=naming_convention)
 # Values of delivery_table.c.outcome.
 EVENTS_RECORDED = "events_recorded"
 NO_SUBSCRIBERS = "no_subscribers"
+# A Dag schedules on a candidate, but every such Dag is paused or draining, so nothing is recorded.
+DAG_PAUSED = "dag_paused"
 
 # One row per verified delivery, written in the transaction that records its asset events.
 delivery_table = Table(

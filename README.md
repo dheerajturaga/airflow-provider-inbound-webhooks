@@ -406,8 +406,10 @@ flowchart LR
 ```
 
 The plugin never runs Dags itself. It records asset events, Airflow queues every Dag that schedules
-on them, and the scheduler creates the runs. So one delivery can start several Dags, paused Dags stay
-paused, and asset expressions such as `a | b` work as usual.
+on them, and the scheduler creates the runs. So one delivery can start several Dags, and asset
+expressions such as `a | b` work as usual. Events are only recorded on names that a Dag that is not
+paused schedules on, so a delivery that only paused Dags subscribe to records nothing, and unpausing
+a Dag never replays the deliveries it missed.
 
 ## Event names
 
@@ -670,15 +672,15 @@ A `202` answer has these fields:
 | Field | Meaning |
 |---|---|
 | `status` | `accepted` if any asset event was recorded, otherwise `no_subscribers` |
-| `outcome` | What became of the delivery: `events_recorded`, `no_subscribers`, or `duplicate` for a retry, which records nothing and repeats the rest of its first answer |
+| `outcome` | What became of the delivery: `events_recorded`; `no_subscribers`; `dag_paused` when every Dag that schedules on one of its names is paused (or, on Airflow 3.4 and later, draining), so nothing is recorded; or `duplicate` for a retry, which records nothing and repeats the rest of its first answer |
 | `delivery_id` | The sender's ID for the delivery, or `null` if it sends none |
 | `asset_events` | The asset event recorded on each subscribed name |
 | `candidates` | Every name the delivery offered |
 
 | Status | Meaning | What to check |
 |---|---|---|
-| `202` `accepted` | Recorded; `asset_events` lists the asset event per subscribed name | If no Dag run starts, the Dag is paused |
-| `202` `no_subscribers` | Verified, but no Dag schedules on any of the `candidates`, so no asset event is recorded | The Dag schedules on one of the `candidates` and has been parsed: `airflow dags reserialize` parses it now. The API server logs the `candidates` at debug level |
+| `202` `accepted` | Recorded; `asset_events` lists the asset event per subscribed name | If no Dag run starts, check that the scheduler is running |
+| `202` `no_subscribers` | Verified, but no Dag that is not paused schedules on any of the `candidates`, so no asset event is recorded | With `outcome` `dag_paused`, unpause the Dag. Otherwise, the Dag schedules on one of the `candidates` and has been parsed: `airflow dags reserialize` parses it now. The API server logs the `candidates` at debug level |
 | `400` | The body is not a JSON object or holds `NaN` or `Infinity`, which JSON does not allow, the event name is missing, or the delivery ID is longer than 255 characters | GitHub: the content type is `application/json`. Jira: *Exclude body* is unchecked |
 | `401` | Signature or token does not match | The secret in the service equals the connection's password |
 | `404` | No such webhook: the name is not in `webhook_names`, or has no `webhook_<name>` connection | The name is in `webhook_names` and the API server was restarted after it changed; the connection ID is `webhook_` plus the name in the URL. Airflow's connection lookup also reports a database or secrets backend it could not read as a missing connection, which is then reused for `connection_cache_ttl` |

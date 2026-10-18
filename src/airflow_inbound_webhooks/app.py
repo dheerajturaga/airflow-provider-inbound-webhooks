@@ -22,7 +22,7 @@ from airflow.configuration import conf
 from airflow.exceptions import AirflowNotFoundException
 from airflow.sdk import Connection
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
-from sqlalchemy import select, update
+from sqlalchemy import exists, or_, select, update
 from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError, ProgrammingError
 
 from airflow_inbound_webhooks import configuration
@@ -35,6 +35,8 @@ from airflow_inbound_webhooks.sources import (
 )
 
 if TYPE_CHECKING:
+    from airflow.models.asset import AssetModel
+    from sqlalchemy import ColumnElement, Select
     from sqlalchemy.engine import CursorResult, Row
     from sqlalchemy.orm import Session
 
@@ -324,6 +326,52 @@ def find_delivery(
     ).one_or_none()
 
 
+def find_subscribed_assets(session: Session, candidates: list[str]) -> tuple[list[AssetModel], bool]:
+    """
+    Return the candidates a Dag that is not stale, paused or draining schedules on.
+
+    That is the test Airflow applies before it runs an asset's watchers, plus draining, which Airflow's
+    queueing also skips, so an event is never recorded on a name no Dag would run for. A Dag schedules
+    on an asset directly, or through ``Asset.ref(name=...)`` or ``Asset.ref(uri=...)``, which Airflow
+    queues too. When there are none, the second value says whether a paused or draining Dag schedules
+    on a candidate.
+    """
+    from airflow.models.asset import (
+        AssetModel,
+        DagScheduleAssetNameReference,
+        DagScheduleAssetReference,
+        DagScheduleAssetUriReference,
+    )
+    from airflow.models.dag import DagModel
+
+    not_stale = ~DagModel.is_stale
+    live = not_stale & ~DagModel.is_paused
+    # The draining state only exists from Airflow 3.4.
+    if hasattr(DagModel, "is_draining"):
+        live &= ~DagModel.is_draining
+
+    def scheduled_by(condition: ColumnElement[bool]) -> Select[tuple[AssetModel]]:
+        return select(AssetModel).where(
+            AssetModel.name.in_(candidates),
+            AssetModel.active.has(),
+            or_(
+                AssetModel.scheduled_dags.any(DagScheduleAssetReference.dag.has(condition)),
+                exists().where(
+                    DagScheduleAssetNameReference.name == AssetModel.name,
+                    DagScheduleAssetNameReference.dag.has(condition),
+                ),
+                exists().where(
+                    DagScheduleAssetUriReference.uri == AssetModel.uri,
+                    DagScheduleAssetUriReference.dag.has(condition),
+                ),
+            ),
+        )
+
+    if subscribed := list(session.scalars(scheduled_by(live))):
+        return subscribed, False
+    return [], session.scalars(scheduled_by(not_stale).limit(1)).first() is not None
+
+
 def build_response(
     delivery_id: str | None, outcome: str, asset_events: dict[str, int], candidates: list[str]
 ) -> dict[str, Any]:
@@ -346,10 +394,9 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
     # Imported here rather than at module level: Airflow imports plugins in every process, including
     # each task run, and only the API server needs these.
     from airflow.assets.manager import asset_manager
-    from airflow.models.asset import AssetModel
     from airflow.utils.session import create_session
 
-    from airflow_inbound_webhooks.models import EVENTS_RECORDED, NO_SUBSCRIBERS, delivery_table
+    from airflow_inbound_webhooks.models import DAG_PAUSED, EVENTS_RECORDED, NO_SUBSCRIBERS, delivery_table
 
     candidates = build_candidate_names(webhook.name, event)
     extra = {
@@ -376,16 +423,18 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
                 return build_response(
                     event.delivery_id, DUPLICATE, original.asset_events, original.candidates
                 )
-            subscribed = session.scalars(
-                select(AssetModel).where(AssetModel.name.in_(candidates), AssetModel.active.has())
-            ).all()
+            subscribed, only_paused_subscribers = find_subscribed_assets(session, candidates)
             for asset_model in subscribed:
                 asset_event = asset_manager.register_asset_change(
                     asset=asset_model, extra=extra, session=session, **team_arguments
                 )
                 if asset_event is not None:
                     asset_events[asset_model.name] = asset_event.id
-            outcome = EVENTS_RECORDED if asset_events else NO_SUBSCRIBERS
+            if asset_events:
+                outcome = EVENTS_RECORDED
+            else:
+                # Nothing is recorded for a paused Dag, so unpausing it never replays the delivery.
+                outcome = DAG_PAUSED if only_paused_subscribers else NO_SUBSCRIBERS
             recorded = {
                 "candidates": candidates,
                 "asset_events": asset_events,
