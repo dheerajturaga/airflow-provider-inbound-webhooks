@@ -1,129 +1,4 @@
 {
-  "github-push": [
-    "github/o/web/push",
-    "github/o/*/push",
-    "github/*/push",
-    "github/o/web/push/labeled",
-    "github/o/*/push/labeled",
-    "github/*/push/labeled",
-    "github/o/web/push/labeled/deploy-preview",
-    "github/o/*/push/labeled/deploy-preview",
-    "github/*/push/labeled/deploy-preview"
-  ],
-  "github-pull_request": [
-    "github/o/web/pull_request",
-    "github/o/*/pull_request",
-    "github/*/pull_request",
-    "github/o/web/pull_request/labeled",
-    "github/o/*/pull_request/labeled",
-    "github/*/pull_request/labeled",
-    "github/o/web/pull_request/labeled/deploy-preview",
-    "github/o/*/pull_request/labeled/deploy-preview",
-    "github/*/pull_request/labeled/deploy-preview"
-  ],
-  "github-workflow_run": [
-    "github/o/web/workflow_run",
-    "github/o/*/workflow_run",
-    "github/*/workflow_run",
-    "github/o/web/workflow_run/labeled",
-    "github/o/*/workflow_run/labeled",
-    "github/*/workflow_run/labeled",
-    "github/o/web/workflow_run/labeled/deploy-preview",
-    "github/o/*/workflow_run/labeled/deploy-preview",
-    "github/*/workflow_run/labeled/deploy-preview"
-  ],
-  "gitlab-push": [
-    "gitlab/g/sub/web/push",
-    "gitlab/g/sub/*/push",
-    "gitlab/g/*/push",
-    "gitlab/*/push",
-    "gitlab/g/sub/web/push/update",
-    "gitlab/g/sub/*/push/update",
-    "gitlab/g/*/push/update",
-    "gitlab/*/push/update",
-    "gitlab/g/sub/web/push/update/main",
-    "gitlab/g/sub/*/push/update/main",
-    "gitlab/g/*/push/update/main",
-    "gitlab/*/push/update/main",
-    "gitlab/g/sub/web/push/labeled",
-    "gitlab/g/sub/*/push/labeled",
-    "gitlab/g/*/push/labeled",
-    "gitlab/*/push/labeled",
-    "gitlab/g/sub/web/push/labeled/b",
-    "gitlab/g/sub/*/push/labeled/b",
-    "gitlab/g/*/push/labeled/b",
-    "gitlab/*/push/labeled/b"
-  ],
-  "gitlab-tag_push": [
-    "gitlab/g/sub/web/tag_push",
-    "gitlab/g/sub/*/tag_push",
-    "gitlab/g/*/tag_push",
-    "gitlab/*/tag_push",
-    "gitlab/g/sub/web/tag_push/update",
-    "gitlab/g/sub/*/tag_push/update",
-    "gitlab/g/*/tag_push/update",
-    "gitlab/*/tag_push/update",
-    "gitlab/g/sub/web/tag_push/update/main",
-    "gitlab/g/sub/*/tag_push/update/main",
-    "gitlab/g/*/tag_push/update/main",
-    "gitlab/*/tag_push/update/main",
-    "gitlab/g/sub/web/tag_push/labeled",
-    "gitlab/g/sub/*/tag_push/labeled",
-    "gitlab/g/*/tag_push/labeled",
-    "gitlab/*/tag_push/labeled",
-    "gitlab/g/sub/web/tag_push/labeled/b",
-    "gitlab/g/sub/*/tag_push/labeled/b",
-    "gitlab/g/*/tag_push/labeled/b",
-    "gitlab/*/tag_push/labeled/b"
-  ],
-  "gitlab-merge_request": [
-    "gitlab/g/sub/web/merge_request",
-    "gitlab/g/sub/*/merge_request",
-    "gitlab/g/*/merge_request",
-    "gitlab/*/merge_request",
-    "gitlab/g/sub/web/merge_request/update",
-    "gitlab/g/sub/*/merge_request/update",
-    "gitlab/g/*/merge_request/update",
-    "gitlab/*/merge_request/update",
-    "gitlab/g/sub/web/merge_request/labeled",
-    "gitlab/g/sub/*/merge_request/labeled",
-    "gitlab/g/*/merge_request/labeled",
-    "gitlab/*/merge_request/labeled",
-    "gitlab/g/sub/web/merge_request/labeled/b",
-    "gitlab/g/sub/*/merge_request/labeled/b",
-    "gitlab/g/*/merge_request/labeled/b",
-    "gitlab/*/merge_request/labeled/b"
-  ],
-  "jira-issue_created": [
-    "jira/OPS/issue_created",
-    "jira/*/issue_created",
-    "jira/OPS/issue_created/Bug",
-    "jira/*/issue_created/Bug",
-    "jira/OPS/issue_created/status",
-    "jira/*/issue_created/status",
-    "jira/OPS/issue_created/status/Done",
-    "jira/*/issue_created/status/Done",
-    "jira/OPS/issue_created/labels",
-    "jira/*/issue_created/labels",
-    "jira/OPS/issue_created/labeled",
-    "jira/*/issue_created/labeled",
-    "jira/OPS/issue_created/labeled/b",
-    "jira/*/issue_created/labeled/b"
-  ],
-  "jira-issue_updated": [
-    "jira/OPS/issue_updated",
-    "jira/*/issue_updated",
-    "jira/OPS/issue_updated/status",
-    "jira/*/issue_updated/status",
-    "jira/OPS/issue_updated/status/Done",
-    "jira/*/issue_updated/status/Done",
-    "jira/OPS/issue_updated/labels",
-    "jira/*/issue_updated/labels",
-    "jira/OPS/issue_updated/labeled",
-    "jira/*/issue_updated/labeled",
-    "jira/OPS/issue_updated/labeled/b",
-    "jira/*/issue_updated/labeled/b"
-  ],
   "github-ping": [
     "github/my-org/web/ping",
     "github/my-org/*/ping",
@@ -342,14 +217,6 @@
     "ghes/my-org/*/pull_request/labeled/deploy-preview",
     "ghes/*/pull_request/labeled/deploy-preview"
   ],
-  "gitlab-pipeline-success": [
-    "gitlab/platform/api/pipeline",
-    "gitlab/platform/*/pipeline",
-    "gitlab/*/pipeline",
-    "gitlab/platform/api/pipeline/success",
-    "gitlab/platform/*/pipeline/success",
-    "gitlab/*/pipeline/success"
-  ],
   "gitlab-push-subgroup": [
     "gitlab/platform/backend/api/push",
     "gitlab/platform/backend/*/push",
@@ -359,6 +226,42 @@
     "gitlab/platform/backend/*/push/main",
     "gitlab/platform/*/push/main",
     "gitlab/*/push/main"
+  ],
+  "gitlab-tag_push-new-tag": [
+    "gitlab/platform/api/tag_push",
+    "gitlab/platform/*/tag_push",
+    "gitlab/*/tag_push",
+    "gitlab/platform/api/tag_push/v1.2.0",
+    "gitlab/platform/*/tag_push/v1.2.0",
+    "gitlab/*/tag_push/v1.2.0"
+  ],
+  "gitlab-merge_request-update-labeled": [
+    "gitlab/platform/api/merge_request",
+    "gitlab/platform/*/merge_request",
+    "gitlab/*/merge_request",
+    "gitlab/platform/api/merge_request/update",
+    "gitlab/platform/*/merge_request/update",
+    "gitlab/*/merge_request/update",
+    "gitlab/platform/api/merge_request/labeled",
+    "gitlab/platform/*/merge_request/labeled",
+    "gitlab/*/merge_request/labeled",
+    "gitlab/platform/api/merge_request/labeled/deploy-preview",
+    "gitlab/platform/*/merge_request/labeled/deploy-preview",
+    "gitlab/*/merge_request/labeled/deploy-preview"
+  ],
+  "gitlab-pipeline-success": [
+    "gitlab/platform/api/pipeline",
+    "gitlab/platform/*/pipeline",
+    "gitlab/*/pipeline",
+    "gitlab/platform/api/pipeline/success",
+    "gitlab/platform/*/pipeline/success",
+    "gitlab/*/pipeline/success"
+  ],
+  "jira-issue_created-bug": [
+    "jira/OPS/issue_created",
+    "jira/*/issue_created",
+    "jira/OPS/issue_created/Bug",
+    "jira/*/issue_created/Bug"
   ],
   "jira-issue_updated-status-and-label": [
     "jira/OPS/issue_updated",
@@ -374,11 +277,15 @@
     "jira/OPS/issue_updated/labeled/hotfix",
     "jira/*/issue_updated/labeled/hotfix"
   ],
-  "jira-issue_created-bug": [
-    "jira/OPS/issue_created",
-    "jira/*/issue_created",
-    "jira/OPS/issue_created/Bug",
-    "jira/*/issue_created/Bug"
+  "jira-issue_updated-custom-field": [
+    "jira/OPS/issue_updated",
+    "jira/*/issue_updated",
+    "jira/OPS/issue_updated/Story Points",
+    "jira/*/issue_updated/Story Points"
+  ],
+  "jira-comment_created": [
+    "jira/OPS/comment_created",
+    "jira/*/comment_created"
   ],
   "jira-sprint_started": [
     "jira/sprint_started"
