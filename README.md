@@ -669,8 +669,8 @@ checks on. When several Dags of one file are refused, the import error gives one
 
 The checks have limits:
 
-- They look only at `WebhookTopic`s: a Dag that schedules on `Asset(name)` is never refused, and a
-  plain `Asset` on a topic's name can still be an outlet. They guard against mistakes, not misuse.
+- They look only at `WebhookTopic`s: a Dag that schedules on a plain `Asset` is never refused, and
+  a plain `Asset` on a topic's name can still be an outlet. They guard against mistakes, not misuse.
 - They see one Dag at a time, so they cannot see the same name declared as an `Asset` elsewhere.
 - From Airflow 3.2 they do not see topics in a timetable imported from `airflow.timetables` rather
   than `airflow.sdk`, which turns them into plain assets.
@@ -680,8 +680,8 @@ The checks have limits:
   together: the labels `kind` and `kind/bug`, whose `/` reads as a segment boundary, or
   `github/my-org/*/release` and `github/my-org/web/push/release`, which a path of three segments,
   such as a GitLab project's, offers together, but a GitHub path never has three. For such a pair,
-  declare one side as a plain `Asset(name)`, which the checks ignore, or schedule the two in two
-  Dags.
+  declare one side as a plain `Asset` of the same name, which the checks ignore, or schedule the two
+  in two Dags.
 
 Installing the package registers the checks as an Airflow cluster policy in every Airflow process;
 while `dag_checks` is `off`, the default, they return at once. Any value but `off` and `error`

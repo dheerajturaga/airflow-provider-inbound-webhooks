@@ -180,6 +180,8 @@ DELIVERIES: dict[str, Delivery] = {
     ),
     "github-push-branch": github("push", {"ref": "refs/heads/main", **MY_ORG_WEB}),
     "github-push-branch-with-slash": github("push", {"ref": "refs/heads/feature/login", **MY_ORG_WEB}),
+    # A branch named like an event, which the README uses to show the limits of the topic checks.
+    "github-push-branch-named-release": github("push", {"ref": "refs/heads/release", **MY_ORG_WEB}),
     # GitHub reports deleting a branch as a push to it.
     "github-push-branch-deleted": github(
         "push", {"ref": "refs/heads/feature/login", "deleted": True, **MY_ORG_WEB}
