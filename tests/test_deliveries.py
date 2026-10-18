@@ -8,6 +8,8 @@ tests/test_api_server.py checks their login against the real API server.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -15,9 +17,11 @@ from unittest import mock
 
 import pytest
 from airflow.api_fastapi.auth.managers.models.resource_details import ConnectionDetails
+from airflow.models.asset import AssetEvent
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
-from airflow_inbound_webhooks import deliveries
+from airflow_inbound_webhooks import app, deliveries
 from airflow_inbound_webhooks.app import build_app
 
 pytestmark = pytest.mark.usefixtures("clean_db")
@@ -29,6 +33,11 @@ TEAM_A_CONNECTION = {
     "AIRFLOW_CONN_WEBHOOK_GITHUB": json.dumps(
         {"conn_type": "inbound_webhook", "extra": {"team_name": "team_a"}}
     )
+}
+LABELED = {
+    "action": "labeled",
+    "label": {"name": "deploy-preview"},
+    "repository": {"full_name": "my-org/web"},
 }
 
 
@@ -157,6 +166,25 @@ def test_one_delivery_comes_with_its_payload(client, add_delivery):
     assert client.get(f"/_deliveries/github/{delivery}").json()["payload"] == {"ref": "refs/heads/main"}
     # Another webhook's delivery is not found under this one.
     assert client.get(f"/_deliveries/gitlab/{delivery}").status_code == 404
+
+
+def test_asset_event_finds_its_delivery_by_its_inbound_delivery_id(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    body = json.dumps(LABELED).encode()
+    headers = {
+        "content-type": "application/json",
+        "X-GitHub-Event": "pull_request",
+        "X-GitHub-Delivery": "delivery-1",
+        "X-Hub-Signature-256": f"sha256={hmac.new(b's3cret', body, hashlib.sha256).hexdigest()}",
+    }
+    # So the connection the delivery is verified with is not kept for later tests.
+    with mock.patch.dict(app.resolved_webhooks):
+        assert client.post("/github", content=body, headers=headers).status_code == 202
+
+    (extra,) = session.scalars(select(AssetEvent.extra))
+    delivery = client.get(f"/_deliveries/github/{extra['inbound_delivery_id']}").json()
+
+    assert (delivery["delivery_id"], delivery["payload"]) == ("delivery-1", LABELED)
 
 
 @mock.patch.dict(os.environ, {"AIRFLOW__INBOUND_WEBHOOKS__WEBHOOK_NAMES": "github,gitlab"})

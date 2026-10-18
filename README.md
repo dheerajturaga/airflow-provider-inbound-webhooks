@@ -625,6 +625,7 @@ Besides `payload`, `extra` holds:
 | `source_type` | The connection's source type, such as `github` |
 | `path` | Where the event happened, as in its names |
 | `delivery_id` | The service's ID for the delivery, where it sends one |
+| `inbound_delivery_id` | The ID of the delivery's [record](#delivery-records), set even when the service sends no delivery ID. `GET /webhooks/_deliveries/<webhook>/<inbound_delivery_id>` returns the record |
 | `correlation_key` | `null`: no source type sets one yet |
 
 Anyone allowed to create asset events, through the REST API or the UI, can create one with the same
@@ -848,7 +849,8 @@ From 0.1.0 the project follows [Semantic Versioning](https://semver.org/) for it
   `[inbound_webhooks]` configuration options;
 - [event names](#event-names);
 - each asset event's `extra`: the keys `from_webhook`, `webhook`, `source_type`, `source`, `path`,
-  `delivery_id`, `correlation_key` and `payload`, and for `jira` the issue fields its summary keeps.
+  `delivery_id`, `inbound_delivery_id`, `correlation_key` and `payload`, and for `jira` the issue
+  fields its summary keeps.
 
 Below 1.0, a change that breaks any of them ships only in a new minor version, and the
 [changelog](CHANGELOG.md) describes it. The Python modules are not a public interface yet: code that

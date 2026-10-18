@@ -514,6 +514,28 @@ def build_audit_log(webhook: ConfiguredWebhook, event: WebhookEvent, asset_event
     return entry
 
 
+def build_event_extra(
+    webhook: ConfiguredWebhook, event: WebhookEvent, payload: dict[str, Any] | None, record_id: str
+) -> dict[str, Any]:
+    """Return the ``extra`` of each asset event a delivery records; ``record_id`` is its row's ID."""
+    return {
+        # Set here, as Airflow sets from_rest_api, so Dags can tell webhook events apart. Anyone allowed to
+        # create asset events can set it too, so it marks where an event says it came from, not proof.
+        "from_webhook": True,
+        "webhook": webhook.name,
+        "source_type": webhook.source_type,
+        # The same as webhook, kept because it was public first.
+        "source": webhook.name,
+        "path": event.path,
+        "delivery_id": event.delivery_id,
+        # What links an event to its delivery: the sender's delivery_id can be null, and is unique only
+        # together with the body.
+        "inbound_delivery_id": record_id,
+        "correlation_key": event.correlation_key,
+        "payload": payload,
+    }
+
+
 def build_response(
     delivery_id: str | None, outcome: str, asset_events: dict[str, int], candidates: list[str]
 ) -> dict[str, Any]:
@@ -542,19 +564,6 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
 
     candidates = build_candidate_names(webhook.name, event)
     payload = webhook.select_payload(event.payload)
-    extra = {
-        # Set here, as Airflow sets from_rest_api, so Dags can tell webhook events apart. Anyone allowed to
-        # create asset events can set it too, so it marks where an event says it came from, not proof.
-        "from_webhook": True,
-        "webhook": webhook.name,
-        "source_type": webhook.source_type,
-        # The same as webhook, kept because it was public first.
-        "source": webhook.name,
-        "path": event.path,
-        "delivery_id": event.delivery_id,
-        "correlation_key": event.correlation_key,
-        "payload": payload,
-    }
     team_arguments: dict[str, Any] = (
         {"source_is_api": True, "api_user_teams": {webhook.team_name} if webhook.team_name else set()}
         if supports_team_attribution()
@@ -573,6 +582,10 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
                 return build_response(
                     event.delivery_id, DUPLICATE, original.asset_events, original.candidates
                 )
+            # Chosen before the row is written, because every event carries it. A redelivery updates the
+            # row of the delivery it repeats.
+            record_id = str(uuid.uuid4()) if original is None else original.id
+            extra = build_event_extra(webhook, event, payload, record_id)
             subscribed, only_paused_subscribers = find_subscribed_assets(session, candidates)
             for asset_model in subscribed:
                 asset_event = asset_manager.register_asset_change(
@@ -597,7 +610,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
             if original is None:
                 session.execute(
                     delivery_table.insert().values(
-                        id=str(uuid.uuid4()),
+                        id=record_id,
                         webhook=webhook.name,
                         delivery_id=event.delivery_id,
                         body_digest=body_digest,

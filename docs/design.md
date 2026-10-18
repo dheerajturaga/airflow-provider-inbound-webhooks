@@ -31,12 +31,15 @@ documentation is in the [README](../README.md).
    Dags schedule on a candidate, the outcome is `dag_paused` and nothing is recorded, so unpausing
    never replays the delivery.
 8. `asset_manager.register_asset_change` records an asset event on each, which queues the Dags that
-   schedule on it, and the delivery's row is inserted. The endpoint commits its own database session
-   before responding, so `accepted` means the events and the row are stored. A copy of the delivery
-   that arrives while the first is being recorded fails on the unique constraint, or for a
-   redelivery on an update that only matches a row with no events, which rolls back its events, and
-   it is answered from the first copy's row. A database that cannot be used, or lacks the delivery
-   table, is a `503` with `Retry-After`, logged at most once a minute.
+   schedule on it, and the delivery's row is inserted, or for a redelivery updated. Every event's
+   `extra` holds the row's `id` as `inbound_delivery_id`, which the endpoint chooses before it
+   records the events, so an event leads back to its delivery even when the sender sends no delivery
+   ID; a redelivery's events hold the `id` of the row it updates. The endpoint commits its own
+   database session before responding, so `accepted` means the events and the row are stored. A
+   copy of the delivery that arrives while the first is being recorded fails on the unique
+   constraint, or for a redelivery on an update that only matches a row with no events, which rolls
+   back its events, and it is answered from the first copy's row. A database that cannot be used, or
+   lacks the delivery table, is a `503` with `Retry-After`, logged at most once a minute.
 
 The plugin never creates Dag runs; Airflow's own asset scheduling does.
 

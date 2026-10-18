@@ -176,6 +176,7 @@ def test_github_label_triggers_only_subscribed_dags(client, session, subscribe):
     }
     assert len(body["candidates"]) == 9
     assert get_queued_dag_ids(session) == {"web_deploy_preview", "org_deploy_preview", "any_deploy_preview"}
+    (delivery,) = get_deliveries(session)
     assert session.scalars(select(AssetEvent.extra)).first() == {
         "from_webhook": True,
         "webhook": "github",
@@ -183,6 +184,7 @@ def test_github_label_triggers_only_subscribed_dags(client, session, subscribe):
         "source": "github",
         "path": "my-org/web",
         "delivery_id": "delivery-1",
+        "inbound_delivery_id": delivery.id,
         "correlation_key": None,
         "payload": LABELED,
     }
@@ -300,6 +302,7 @@ def test_jira_transition_stores_issue_summary(client, session, subscribe):
     assert response.status_code == 202
     assert response.json()["status"] == "accepted"
     assert get_queued_dag_ids(session) == {"deploy_ready_issues"}
+    (delivery,) = get_deliveries(session)
     assert session.scalars(select(AssetEvent.extra)).first() == {
         "from_webhook": True,
         "webhook": "jira",
@@ -307,6 +310,7 @@ def test_jira_transition_stores_issue_summary(client, session, subscribe):
         "source": "jira",
         "path": "OPS",
         "delivery_id": "webhook-1",
+        "inbound_delivery_id": delivery.id,
         "correlation_key": None,
         "payload": {**payload, "issue": {"key": "OPS-42", "fields": {"project": {"key": "OPS"}}}},
     }
@@ -547,6 +551,18 @@ def test_delivery_is_recorded_with_what_arrived(client, session, subscribe):
     assert delivery.received_at.tzinfo is not None
 
 
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_each_event_carries_the_id_of_its_delivery_record(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    subscribe("any_pull_request", "github/*/pull_request")
+
+    post_github(client)
+
+    (delivery,) = get_deliveries(session)
+    extras = list(session.scalars(select(AssetEvent.extra)))
+    assert [extra["inbound_delivery_id"] for extra in extras] == [delivery.id] * 2
+
+
 @mock.patch.dict(os.environ, build_conn_env("deploybot", **DEPLOYBOT_EXTRA, delivery_id_field="id"))
 def test_generic_source_recognises_retries_by_the_delivery_id_it_is_configured_with(
     client, session, subscribe
@@ -618,6 +634,18 @@ def test_redelivery_after_subscribing_records_the_delivery(client, session, subs
     assert [(delivery.outcome, delivery.payload) for delivery in get_deliveries(session)] == [
         ("accepted", LABELED)
     ]
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_events_of_a_redelivery_carry_the_id_of_the_record_it_updates(client, session, subscribe):
+    post_github(client)
+    (unmatched,) = get_deliveries(session)
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    assert post_github(client).json()["outcome"] == "accepted"
+
+    assert [delivery.id for delivery in get_deliveries(session)] == [unmatched.id]
+    assert session.scalars(select(AssetEvent.extra)).one()["inbound_delivery_id"] == unmatched.id
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
