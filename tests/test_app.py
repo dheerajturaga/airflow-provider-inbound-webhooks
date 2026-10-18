@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.dml import Insert
 
 from airflow_inbound_webhooks import app
 from airflow_inbound_webhooks.app import build_app, get_asset_change_arguments
@@ -685,6 +686,21 @@ def test_event_names_its_webhook_and_source_type(client, session, subscribe):
     assert (extra["from_webhook"], extra["webhook"], extra["source_type"]) == (True, "deploybot", "hmac_json")
 
 
+@pytest.mark.skipif(
+    not hasattr(AssetEvent, "partition_key"), reason="Asset events only have a partition key from Airflow 3.2"
+)
+@mock.patch.dict(os.environ, DEPLOYBOT_CONN)
+def test_recorded_events_have_no_partition_key(client, session, subscribe):
+    # Airflow queues only Dags with a partitioned timetable for an event with a partition key, so a key
+    # would keep the Dags that schedule on a name from running. A sender cannot set one either.
+    subscribe("smoke_test_billing", "deploybot/billing/deployed")
+    subscribe("smoke_test_any_service", "deploybot/*/deployed")
+
+    post_deploybot(client, {"event": "deployed", "service": "billing", "partition_key": "2026-10-18"})
+
+    assert list(session.scalars(select(AssetEvent.partition_key))) == [None, None]
+
+
 @mock.patch.dict(os.environ, DEPLOYBOT_CONN)
 def test_deliveries_without_an_id_are_never_taken_for_retries(client, session, subscribe):
     subscribe("smoke_test_billing", "deploybot/billing/deployed")
@@ -1174,6 +1190,32 @@ def test_recorded_delivery_is_written_to_the_audit_log(client, session, subscrib
         None,
     )
     assert json.loads(entry.extra) == {"delivery_id": "delivery-1", "asset_events": asset_events}
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_audit_entry_rolls_back_with_its_delivery(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    execute = Session.execute
+    # What the transaction holds when it fails: only once it holds both is their rollback tested.
+    written = []
+
+    def fail_to_insert_the_delivery(self, statement, *args, **kwargs):
+        if isinstance(statement, Insert) and statement.table is delivery_table:
+            # Flushed, so the audit entry is in the database rather than only in the session.
+            self.flush()
+            written.append((count_asset_events(self), len(get_audit_log(self))))
+            raise OperationalError("INSERT", {}, Exception("database is locked"))
+        return execute(self, statement, *args, **kwargs)
+
+    with mock.patch.object(Session, "execute", fail_to_insert_the_delivery):
+        response = post_github(client)
+
+    assert (response.status_code, response.headers["Retry-After"]) == (503, "30")
+    assert written == [(1, 1)]
+    assert get_audit_log(session) == []
+    assert count_asset_events(session) == 0
+    assert get_queued_dag_ids(session) == set()
+    assert get_deliveries(session) == []
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)

@@ -55,6 +55,7 @@ The tests are organised as:
 |---|---|
 | `tests/test_sources.py` | Verification and parsing of each source type |
 | `tests/test_naming.py` | The event naming rule |
+| `tests/test_name_stability.py` | That deliveries offer the names recorded for them in `tests/candidate_names.json`, and that the names the README and the example Dags use are offered |
 | `tests/test_app.py` | The endpoint, in process: routing, responses, connection handling |
 | `tests/test_api_server.py` | The real `airflow api-server` with the installed plugin, over HTTP, including the README quick start |
 | `tests/test_plugin.py` | That importing the plugin, which every Airflow process does, leaves the endpoint's Airflow internals unimported |
@@ -126,7 +127,9 @@ lookup and recording, is shared. Source types live in `src/airflow_inbound_webho
    `src/airflow_inbound_webhooks/connection_form.py`.
 3. Add tests in `tests/test_sources.py` for verification (valid, missing, wrong) and parsing, and an
    end-to-end case in `tests/test_app.py`. Add a delivery carrying every field `parse()` reads to
-   `FULL_DELIVERIES`, which checks that a delivery of any shape is named or refused.
+   `FULL_DELIVERIES`, which checks that a delivery of any shape is named or refused, and deliveries
+   of the events it names, as the service sends them, to `tests/test_name_stability.py`; then record
+   their names, as below.
 4. Document it under "Source types" in the README.
 
 Use the service's own event and action names, so its webhook documentation stays the reference for
@@ -137,6 +140,15 @@ existing delivery produces is a breaking change; see "Stability" under "Event na
 Adding a kind or a detail is not, because the shorter names are still offered. The connection
 options a source type reads, and the fields a summary keeps, are public interfaces too; see
 "Versioning" in the README.
+
+`tests/test_name_stability.py` fails when a delivery's names change: `tests/candidate_names.json`
+records the names each of its deliveries offers. Once a change to them is deliberate, record them
+again, and review the changes before committing them:
+
+```bash
+INBOUND_WEBHOOKS_RECORD_NAMES=1 .venv/bin/pytest tests/test_name_stability.py
+git diff tests/candidate_names.json
+```
 
 ## Changing the delivery table
 

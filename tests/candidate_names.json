@@ -1,0 +1,397 @@
+{
+  "github-push": [
+    "github/o/web/push",
+    "github/o/*/push",
+    "github/*/push",
+    "github/o/web/push/labeled",
+    "github/o/*/push/labeled",
+    "github/*/push/labeled",
+    "github/o/web/push/labeled/deploy-preview",
+    "github/o/*/push/labeled/deploy-preview",
+    "github/*/push/labeled/deploy-preview"
+  ],
+  "github-pull_request": [
+    "github/o/web/pull_request",
+    "github/o/*/pull_request",
+    "github/*/pull_request",
+    "github/o/web/pull_request/labeled",
+    "github/o/*/pull_request/labeled",
+    "github/*/pull_request/labeled",
+    "github/o/web/pull_request/labeled/deploy-preview",
+    "github/o/*/pull_request/labeled/deploy-preview",
+    "github/*/pull_request/labeled/deploy-preview"
+  ],
+  "github-workflow_run": [
+    "github/o/web/workflow_run",
+    "github/o/*/workflow_run",
+    "github/*/workflow_run",
+    "github/o/web/workflow_run/labeled",
+    "github/o/*/workflow_run/labeled",
+    "github/*/workflow_run/labeled",
+    "github/o/web/workflow_run/labeled/deploy-preview",
+    "github/o/*/workflow_run/labeled/deploy-preview",
+    "github/*/workflow_run/labeled/deploy-preview"
+  ],
+  "gitlab-push": [
+    "gitlab/g/sub/web/push",
+    "gitlab/g/sub/*/push",
+    "gitlab/g/*/push",
+    "gitlab/*/push",
+    "gitlab/g/sub/web/push/update",
+    "gitlab/g/sub/*/push/update",
+    "gitlab/g/*/push/update",
+    "gitlab/*/push/update",
+    "gitlab/g/sub/web/push/update/main",
+    "gitlab/g/sub/*/push/update/main",
+    "gitlab/g/*/push/update/main",
+    "gitlab/*/push/update/main",
+    "gitlab/g/sub/web/push/labeled",
+    "gitlab/g/sub/*/push/labeled",
+    "gitlab/g/*/push/labeled",
+    "gitlab/*/push/labeled",
+    "gitlab/g/sub/web/push/labeled/b",
+    "gitlab/g/sub/*/push/labeled/b",
+    "gitlab/g/*/push/labeled/b",
+    "gitlab/*/push/labeled/b"
+  ],
+  "gitlab-tag_push": [
+    "gitlab/g/sub/web/tag_push",
+    "gitlab/g/sub/*/tag_push",
+    "gitlab/g/*/tag_push",
+    "gitlab/*/tag_push",
+    "gitlab/g/sub/web/tag_push/update",
+    "gitlab/g/sub/*/tag_push/update",
+    "gitlab/g/*/tag_push/update",
+    "gitlab/*/tag_push/update",
+    "gitlab/g/sub/web/tag_push/update/main",
+    "gitlab/g/sub/*/tag_push/update/main",
+    "gitlab/g/*/tag_push/update/main",
+    "gitlab/*/tag_push/update/main",
+    "gitlab/g/sub/web/tag_push/labeled",
+    "gitlab/g/sub/*/tag_push/labeled",
+    "gitlab/g/*/tag_push/labeled",
+    "gitlab/*/tag_push/labeled",
+    "gitlab/g/sub/web/tag_push/labeled/b",
+    "gitlab/g/sub/*/tag_push/labeled/b",
+    "gitlab/g/*/tag_push/labeled/b",
+    "gitlab/*/tag_push/labeled/b"
+  ],
+  "gitlab-merge_request": [
+    "gitlab/g/sub/web/merge_request",
+    "gitlab/g/sub/*/merge_request",
+    "gitlab/g/*/merge_request",
+    "gitlab/*/merge_request",
+    "gitlab/g/sub/web/merge_request/update",
+    "gitlab/g/sub/*/merge_request/update",
+    "gitlab/g/*/merge_request/update",
+    "gitlab/*/merge_request/update",
+    "gitlab/g/sub/web/merge_request/labeled",
+    "gitlab/g/sub/*/merge_request/labeled",
+    "gitlab/g/*/merge_request/labeled",
+    "gitlab/*/merge_request/labeled",
+    "gitlab/g/sub/web/merge_request/labeled/b",
+    "gitlab/g/sub/*/merge_request/labeled/b",
+    "gitlab/g/*/merge_request/labeled/b",
+    "gitlab/*/merge_request/labeled/b"
+  ],
+  "jira-issue_created": [
+    "jira/OPS/issue_created",
+    "jira/*/issue_created",
+    "jira/OPS/issue_created/Bug",
+    "jira/*/issue_created/Bug",
+    "jira/OPS/issue_created/status",
+    "jira/*/issue_created/status",
+    "jira/OPS/issue_created/status/Done",
+    "jira/*/issue_created/status/Done",
+    "jira/OPS/issue_created/labels",
+    "jira/*/issue_created/labels",
+    "jira/OPS/issue_created/labeled",
+    "jira/*/issue_created/labeled",
+    "jira/OPS/issue_created/labeled/b",
+    "jira/*/issue_created/labeled/b"
+  ],
+  "jira-issue_updated": [
+    "jira/OPS/issue_updated",
+    "jira/*/issue_updated",
+    "jira/OPS/issue_updated/status",
+    "jira/*/issue_updated/status",
+    "jira/OPS/issue_updated/status/Done",
+    "jira/*/issue_updated/status/Done",
+    "jira/OPS/issue_updated/labels",
+    "jira/*/issue_updated/labels",
+    "jira/OPS/issue_updated/labeled",
+    "jira/*/issue_updated/labeled",
+    "jira/OPS/issue_updated/labeled/b",
+    "jira/*/issue_updated/labeled/b"
+  ],
+  "github-ping": [
+    "github/my-org/web/ping",
+    "github/my-org/*/ping",
+    "github/*/ping"
+  ],
+  "github-ping-organization-webhook": [
+    "github/my-org/*/ping",
+    "github/*/ping"
+  ],
+  "github-pull_request-opened": [
+    "github/my-org/web/pull_request",
+    "github/my-org/*/pull_request",
+    "github/*/pull_request",
+    "github/my-org/web/pull_request/opened",
+    "github/my-org/*/pull_request/opened",
+    "github/*/pull_request/opened"
+  ],
+  "github-pull_request-closed-merged": [
+    "github/my-org/web/pull_request",
+    "github/my-org/*/pull_request",
+    "github/*/pull_request",
+    "github/my-org/web/pull_request/closed",
+    "github/my-org/*/pull_request/closed",
+    "github/*/pull_request/closed"
+  ],
+  "github-pull_request-labeled": [
+    "github/my-org/web/pull_request",
+    "github/my-org/*/pull_request",
+    "github/*/pull_request",
+    "github/my-org/web/pull_request/labeled",
+    "github/my-org/*/pull_request/labeled",
+    "github/*/pull_request/labeled",
+    "github/my-org/web/pull_request/labeled/deploy-preview",
+    "github/my-org/*/pull_request/labeled/deploy-preview",
+    "github/*/pull_request/labeled/deploy-preview"
+  ],
+  "github-pull_request-unlabeled": [
+    "github/my-org/web/pull_request",
+    "github/my-org/*/pull_request",
+    "github/*/pull_request",
+    "github/my-org/web/pull_request/unlabeled",
+    "github/my-org/*/pull_request/unlabeled",
+    "github/*/pull_request/unlabeled",
+    "github/my-org/web/pull_request/unlabeled/deploy-preview",
+    "github/my-org/*/pull_request/unlabeled/deploy-preview",
+    "github/*/pull_request/unlabeled/deploy-preview"
+  ],
+  "github-pull_request-labeled-with-slash": [
+    "github/my-org/web/pull_request",
+    "github/my-org/*/pull_request",
+    "github/*/pull_request",
+    "github/my-org/web/pull_request/labeled",
+    "github/my-org/*/pull_request/labeled",
+    "github/*/pull_request/labeled",
+    "github/my-org/web/pull_request/labeled/kind/bug",
+    "github/my-org/*/pull_request/labeled/kind/bug",
+    "github/*/pull_request/labeled/kind/bug"
+  ],
+  "github-pull_request-labeled-non-ascii": [
+    "github/my-org/web/pull_request",
+    "github/my-org/*/pull_request",
+    "github/*/pull_request",
+    "github/my-org/web/pull_request/labeled",
+    "github/my-org/*/pull_request/labeled",
+    "github/*/pull_request/labeled",
+    "github/my-org/web/pull_request/labeled/deploy",
+    "github/my-org/*/pull_request/labeled/deploy",
+    "github/*/pull_request/labeled/deploy"
+  ],
+  "github-pull_request-labeled-emoji-only": [
+    "github/my-org/web/pull_request",
+    "github/my-org/*/pull_request",
+    "github/*/pull_request",
+    "github/my-org/web/pull_request/labeled",
+    "github/my-org/*/pull_request/labeled",
+    "github/*/pull_request/labeled"
+  ],
+  "github-pull_request-labeled-personal-repository": [
+    "github/dheerajturaga/inbound-webhooks-demo/pull_request",
+    "github/dheerajturaga/*/pull_request",
+    "github/*/pull_request",
+    "github/dheerajturaga/inbound-webhooks-demo/pull_request/labeled",
+    "github/dheerajturaga/*/pull_request/labeled",
+    "github/*/pull_request/labeled",
+    "github/dheerajturaga/inbound-webhooks-demo/pull_request/labeled/deploy-preview",
+    "github/dheerajturaga/*/pull_request/labeled/deploy-preview",
+    "github/*/pull_request/labeled/deploy-preview"
+  ],
+  "github-pull_request_review-submitted": [
+    "github/my-org/web/pull_request_review",
+    "github/my-org/*/pull_request_review",
+    "github/*/pull_request_review",
+    "github/my-org/web/pull_request_review/submitted",
+    "github/my-org/*/pull_request_review/submitted",
+    "github/*/pull_request_review/submitted"
+  ],
+  "github-issues-labeled-with-spaces": [
+    "github/my-org/web/issues",
+    "github/my-org/*/issues",
+    "github/*/issues",
+    "github/my-org/web/issues/labeled",
+    "github/my-org/*/issues/labeled",
+    "github/*/issues/labeled",
+    "github/my-org/web/issues/labeled/good first issue",
+    "github/my-org/*/issues/labeled/good first issue",
+    "github/*/issues/labeled/good first issue"
+  ],
+  "github-push-branch": [
+    "github/my-org/web/push",
+    "github/my-org/*/push",
+    "github/*/push",
+    "github/my-org/web/push/main",
+    "github/my-org/*/push/main",
+    "github/*/push/main"
+  ],
+  "github-push-branch-with-slash": [
+    "github/my-org/web/push",
+    "github/my-org/*/push",
+    "github/*/push",
+    "github/my-org/web/push/feature/login",
+    "github/my-org/*/push/feature/login",
+    "github/*/push/feature/login"
+  ],
+  "github-push-branch-deleted": [
+    "github/my-org/web/push",
+    "github/my-org/*/push",
+    "github/*/push",
+    "github/my-org/web/push/feature/login",
+    "github/my-org/*/push/feature/login",
+    "github/*/push/feature/login"
+  ],
+  "github-push-tag": [
+    "github/my-org/web/push",
+    "github/my-org/*/push",
+    "github/*/push"
+  ],
+  "github-push-mixed-case": [
+    "github/My-Org/Web-UI/push",
+    "github/My-Org/*/push",
+    "github/*/push",
+    "github/My-Org/Web-UI/push/Release-1.2",
+    "github/My-Org/*/push/Release-1.2",
+    "github/*/push/Release-1.2"
+  ],
+  "github-create-branch": [
+    "github/my-org/web/create",
+    "github/my-org/*/create",
+    "github/*/create"
+  ],
+  "github-delete-tag": [
+    "github/my-org/web/delete",
+    "github/my-org/*/delete",
+    "github/*/delete"
+  ],
+  "github-release-published": [
+    "github/my-org/web/release",
+    "github/my-org/*/release",
+    "github/*/release",
+    "github/my-org/web/release/published",
+    "github/my-org/*/release/published",
+    "github/*/release/published"
+  ],
+  "github-workflow_run-completed": [
+    "github/my-org/web/workflow_run",
+    "github/my-org/*/workflow_run",
+    "github/*/workflow_run",
+    "github/my-org/web/workflow_run/completed",
+    "github/my-org/*/workflow_run/completed",
+    "github/*/workflow_run/completed",
+    "github/my-org/web/workflow_run/completed/CI",
+    "github/my-org/*/workflow_run/completed/CI",
+    "github/*/workflow_run/completed/CI"
+  ],
+  "github-workflow_job-completed": [
+    "github/my-org/web/workflow_job",
+    "github/my-org/*/workflow_job",
+    "github/*/workflow_job",
+    "github/my-org/web/workflow_job/completed",
+    "github/my-org/*/workflow_job/completed",
+    "github/*/workflow_job/completed"
+  ],
+  "github-deployment_status-created": [
+    "github/my-org/web/deployment_status",
+    "github/my-org/*/deployment_status",
+    "github/*/deployment_status",
+    "github/my-org/web/deployment_status/created",
+    "github/my-org/*/deployment_status/created",
+    "github/*/deployment_status/created"
+  ],
+  "github-organization-member_added": [
+    "github/my-org/*/organization",
+    "github/*/organization",
+    "github/my-org/*/organization/member_added",
+    "github/*/organization/member_added"
+  ],
+  "github-repository-created": [
+    "github/my-org/api/repository",
+    "github/my-org/*/repository",
+    "github/*/repository",
+    "github/my-org/api/repository/created",
+    "github/my-org/*/repository/created",
+    "github/*/repository/created"
+  ],
+  "github-installation-created": [
+    "github/installation",
+    "github/installation/created"
+  ],
+  "ghes-pull_request-labeled": [
+    "ghes/my-org/web/pull_request",
+    "ghes/my-org/*/pull_request",
+    "ghes/*/pull_request",
+    "ghes/my-org/web/pull_request/labeled",
+    "ghes/my-org/*/pull_request/labeled",
+    "ghes/*/pull_request/labeled",
+    "ghes/my-org/web/pull_request/labeled/deploy-preview",
+    "ghes/my-org/*/pull_request/labeled/deploy-preview",
+    "ghes/*/pull_request/labeled/deploy-preview"
+  ],
+  "gitlab-pipeline-success": [
+    "gitlab/platform/api/pipeline",
+    "gitlab/platform/*/pipeline",
+    "gitlab/*/pipeline",
+    "gitlab/platform/api/pipeline/success",
+    "gitlab/platform/*/pipeline/success",
+    "gitlab/*/pipeline/success"
+  ],
+  "gitlab-push-subgroup": [
+    "gitlab/platform/backend/api/push",
+    "gitlab/platform/backend/*/push",
+    "gitlab/platform/*/push",
+    "gitlab/*/push",
+    "gitlab/platform/backend/api/push/main",
+    "gitlab/platform/backend/*/push/main",
+    "gitlab/platform/*/push/main",
+    "gitlab/*/push/main"
+  ],
+  "jira-issue_updated-status-and-label": [
+    "jira/OPS/issue_updated",
+    "jira/*/issue_updated",
+    "jira/OPS/issue_updated/status",
+    "jira/*/issue_updated/status",
+    "jira/OPS/issue_updated/status/Ready for Deploy",
+    "jira/*/issue_updated/status/Ready for Deploy",
+    "jira/OPS/issue_updated/labels",
+    "jira/*/issue_updated/labels",
+    "jira/OPS/issue_updated/labeled",
+    "jira/*/issue_updated/labeled",
+    "jira/OPS/issue_updated/labeled/hotfix",
+    "jira/*/issue_updated/labeled/hotfix"
+  ],
+  "jira-issue_created-bug": [
+    "jira/OPS/issue_created",
+    "jira/*/issue_created",
+    "jira/OPS/issue_created/Bug",
+    "jira/*/issue_created/Bug"
+  ],
+  "jira-sprint_started": [
+    "jira/sprint_started"
+  ],
+  "demo-deployed": [
+    "demo/billing/deployed",
+    "demo/*/deployed"
+  ],
+  "deploybot-deployed": [
+    "deploybot/billing/deployed",
+    "deploybot/*/deployed"
+  ],
+  "alerts-monitor_alert": [
+    "alerts/monitor_alert"
+  ]
+}
