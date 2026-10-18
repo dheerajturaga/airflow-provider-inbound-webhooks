@@ -36,8 +36,9 @@ class WebhookTopic(Asset):
 
     ``path``, ``action`` and ``detail`` are optional; an event without an action, such as GitHub's
     ``push``, takes its detail right after it (``event="push", detail="main"``). A path can hold
-    several segments, with ``*`` in place of trailing ones, as in ``my-org/*`` or ``*``. Or give the
-    whole name, as a delivery's ``candidates`` list it:
+    several segments, with ``*`` in place of trailing ones, as in ``my-org/*`` or ``*``, and nowhere
+    else. Or give the whole name, as a delivery's ``candidates`` list it, which also spells out a path
+    that holds a literal ``*``:
     ``WebhookTopic("github/my-org/web/pull_request/labeled/deploy-preview")``. A name no delivery can
     offer is refused.
 
@@ -104,11 +105,17 @@ def check_name(name: str) -> None:
         f"WebhookTopic name {name!r} is never offered: names are folded to ASCII, with empty parts and "
         "the spaces around each segment left out"
     )
-    # Each part normalized on its own, as the endpoint normalizes a segment without a slash.
-    suggestion = naming.normalize_path(name)
-    if suggestion is not None and naming.can_be_offered(suggestion):
-        message = f"{message}. Did you mean {suggestion!r}?"
-    raise ValueError(message)
+    # A name does not say where its segments end, so a suggestion is only sure when it does not depend
+    # on that: no part folds to nothing, which would end a kind or drop a path segment, and the parts
+    # normalized one by one give what normalizing them as one segment does.
+    parts = [naming.normalize_segment(part) for part in rest.split("/")]
+    suggestion = "/".join([webhook_name, *parts])
+    if all(parts) and suggestion == f"{webhook_name}/{naming.normalize_segment(rest)}":
+        raise ValueError(f"{message}. Did you mean {suggestion!r}?")
+    raise ValueError(
+        f"{message}. Build it from its segments with the keywords, as the endpoint builds names, or copy "
+        "it from a delivery's candidates"
+    )
 
 
 def build_topic_name(
@@ -137,4 +144,13 @@ def build_topic_name(
                 "a name with it"
             )
         kind.append(normalized)
-    return naming.build_name(webhook, naming.normalize_path(path), kind)
+    scope = naming.normalize_path(path)
+    # The endpoint offers * only in place of trailing path segments, so a * anywhere else would only
+    # match a sender's path that holds one, which the whole name spells out instead.
+    *leading, last = (scope or "").split("/")
+    if any("*" in segment for segment in leading) or ("*" in last and last != "*"):
+        raise ValueError(
+            f"WebhookTopic path {path!r} has a * that is not its whole last segment: * only stands for "
+            "trailing segments, as in 'my-org/*'. Give the whole name for a path that holds a literal *"
+        )
+    return naming.build_name(webhook, scope, kind)

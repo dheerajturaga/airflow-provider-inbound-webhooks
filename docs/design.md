@@ -128,9 +128,16 @@ events. The URI is the name. `attrs.evolve` calls `__init__` with every field, s
 and `watchers` and the name as `uri` must pass; `copy.copy` and `copy.deepcopy` restore the fields
 without calling it.
 
-Dag files import `WebhookTopic` from the package, which Airflow imports in every process for the
-provider metadata. A module `__getattr__` imports `topics.py`, and with it the Task SDK, only when a
-Dag file asks for it.
+Dag files import `WebhookTopic` from the package. A module `__getattr__` imports `topics.py` only
+when a Dag file asks for it, because `topics.py` imports the Task SDK, and so Airflow, which
+initializes as it is imported. Importing the package alone, as
+`python -m airflow_inbound_webhooks.send_test_event` does, imports nothing from Airflow. Airflow's
+own processes gain nothing by it: `import airflow` imports the Task SDK too, through
+`conf.mask_secrets()`, in every supported version.
+
+A topic does not equal a plain `Asset` of its name, because their groups differ. Looking events up
+with the topic, as in `triggering_asset_events[topic]`, works, because the accessor keys events by
+name and URI; the keys it yields when iterated over are plain assets.
 
 ## Airflow internals the plugin uses
 

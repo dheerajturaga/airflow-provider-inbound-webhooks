@@ -41,10 +41,16 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
-    # Airflow imports this package in every process to read the provider's metadata, and WebhookTopic
-    # needs the Task SDK, so only the Dag files that use it import it.
+    # WebhookTopic imports the Task SDK, and so Airflow, which initializes as it is imported. Only Dag
+    # files need it, so importing the package alone, as running the test sender with python -m does,
+    # imports nothing from Airflow. Airflow's own processes save nothing by it: importing Airflow
+    # imports the Task SDK too.
     if name == "WebhookTopic":
         from airflow_inbound_webhooks.topics import WebhookTopic
 
         return WebhookTopic
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted([*globals(), "WebhookTopic"])

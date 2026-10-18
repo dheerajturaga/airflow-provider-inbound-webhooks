@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
+import sys
 
 import attrs
 import pytest
@@ -108,6 +110,8 @@ def test_segments_build_a_name_the_endpoint_offers(segments, event, expected):
         "huggingface/update",
         # A status holds spaces next to its slash, which the endpoint keeps.
         "jira/OPS/issue_updated/status/In Review / QA",
+        # A sender's path can hold a literal *, which only the whole name spells out.
+        "deploybot/*/web/deployed",
     ],
 )
 def test_whole_name_is_taken_as_it_is(name):
@@ -117,14 +121,6 @@ def test_whole_name_is_taken_as_it_is(name):
 @pytest.mark.parametrize(
     ("name", "message"),
     [
-        pytest.param(
-            "github/o/web/pull_request/labeled/\U0001f680 Café",
-            "never offered.*Did you mean 'github/o/web/pull_request/labeled/Cafe'",
-            id="not-folded",
-        ),
-        pytest.param("github/my-org//web/push", "Did you mean 'github/my-org/web/push'", id="empty-part"),
-        pytest.param("github/push/", "Did you mean 'github/push'", id="trailing-slash"),
-        pytest.param("github/ push", "Did you mean 'github/push'", id="space-around-a-segment"),
         pytest.param("GitHub/push", "does not start with a webhook name", id="not-a-webhook-name"),
         pytest.param("/github/push", "does not start with a webhook name", id="leading-slash"),
         pytest.param("github", "has no event", id="webhook-name-only"),
@@ -134,6 +130,44 @@ def test_whole_name_is_taken_as_it_is(name):
 def test_name_no_delivery_can_offer_is_refused(name, message):
     with pytest.raises(ValueError, match=message):
         WebhookTopic(name)
+
+
+@pytest.mark.parametrize(
+    ("name", "suggestion"),
+    [
+        pytest.param(
+            "github/o/web/pull_request/labeled/Café",
+            "github/o/web/pull_request/labeled/Cafe",
+            id="not-folded",
+        ),
+        pytest.param("github/ push", "github/push", id="space-starting-a-segment"),
+        pytest.param("github/push ", "github/push", id="space-ending-a-segment"),
+    ],
+)
+def test_refused_name_suggests_the_name_it_stands_for(name, suggestion):
+    with pytest.raises(ValueError, match=f"is never offered: .* Did you mean '{suggestion}'\\?$"):
+        WebhookTopic(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # GitHub offers ".../labeled/Cafe" for the label, while a status of Jira's could be "/ Cafe".
+        pytest.param("github/o/web/pull_request/labeled/\U0001f680 Café", id="space-left-by-folding"),
+        # Jira offers ".../In Review / QA" for the status, not ".../In Review/QA".
+        pytest.param("jira/OPS/issue_updated/status/In Review / QA/", id="slash-in-a-segment"),
+        # Leaving out a label that folds to nothing would subscribe to every label.
+        pytest.param("github/my-org/web/pull_request/labeled/\U0001f680", id="segment-folding-to-nothing"),
+        pytest.param("github/my-org/web/pull_request/\U0001f680/deploy-preview", id="kind-ended-early"),
+        pytest.param("github/my-org//web/push", id="empty-part"),
+    ],
+)
+def test_refused_name_suggests_none_where_unsure(name):
+    with pytest.raises(ValueError, match="is never offered") as raised:
+        WebhookTopic(name)
+
+    assert "Did you mean" not in str(raised.value)
+    assert "Build it from its segments with the keywords" in str(raised.value)
 
 
 @pytest.mark.parametrize(
@@ -147,6 +181,26 @@ def test_name_no_delivery_can_offer_is_refused(name, message):
         ),
         pytest.param({"webhook": "github", "event": " "}, "event ' ' is empty", id="blank-event"),
         pytest.param({"webhook": "github", "event": 1}, "event must be a string", id="not-a-string"),
+        pytest.param(
+            {"webhook": "github", "path": "*/web", "event": "push"},
+            "path '\\*/web' has a \\* that is not its whole last segment",
+            id="wildcard-before-the-end",
+        ),
+        pytest.param(
+            {"webhook": "gitlab", "path": "platform/*/api", "event": "push"},
+            "is not its whole last segment",
+            id="wildcard-in-the-middle",
+        ),
+        pytest.param(
+            {"webhook": "github", "path": "my-org/web-*", "event": "push"},
+            "is not its whole last segment",
+            id="wildcard-in-a-segment",
+        ),
+        pytest.param(
+            {"webhook": "github", "path": "*/*", "event": "push"},
+            "is not its whole last segment",
+            id="two-wildcards",
+        ),
     ],
 )
 def test_segments_no_delivery_has_are_refused(segments, message):
@@ -257,5 +311,29 @@ def test_topic_is_exported_from_the_package():
     import airflow_inbound_webhooks
 
     assert airflow_inbound_webhooks.WebhookTopic is topics.WebhookTopic
+    assert "WebhookTopic" in dir(airflow_inbound_webhooks)
     with pytest.raises(AttributeError, match="no attribute 'WebhookTopics'"):
         airflow_inbound_webhooks.WebhookTopics
+
+
+# WebhookTopic imports the Task SDK, and so Airflow; Airflow's own processes import both anyway.
+IMPORT_PACKAGE = """
+import sys
+import airflow_inbound_webhooks
+import airflow_inbound_webhooks.send_test_event
+from airflow_inbound_webhooks.get_provider_info import get_provider_info
+get_provider_info()
+dir(airflow_inbound_webhooks)
+print(*sys.modules)
+"""
+
+
+def test_importing_the_package_imports_nothing_from_airflow():
+    # A fresh interpreter, because this test session has imported Airflow already.
+    result = subprocess.run(
+        [sys.executable, "-c", IMPORT_PACKAGE], capture_output=True, text=True, check=True
+    )
+
+    modules = set(result.stdout.split())
+    assert {module for module in modules if module.partition(".")[0] == "airflow"} == set()
+    assert "airflow_inbound_webhooks.topics" not in modules
