@@ -68,6 +68,18 @@ LABELED = {
     "number": 7,
     "repository": {"full_name": "my-org/web"},
 }
+# The names a pull_request delivery of LABELED offers.
+LABELED_CANDIDATES = [
+    "github/my-org/web/pull_request",
+    "github/my-org/*/pull_request",
+    "github/*/pull_request",
+    "github/my-org/web/pull_request/labeled",
+    "github/my-org/*/pull_request/labeled",
+    "github/*/pull_request/labeled",
+    "github/my-org/web/pull_request/labeled/deploy-preview",
+    "github/my-org/*/pull_request/labeled/deploy-preview",
+    "github/*/pull_request/labeled/deploy-preview",
+]
 
 
 def measure(payload: dict) -> int:
@@ -241,14 +253,14 @@ def test_github_label_triggers_only_subscribed_dags(client, session, subscribe):
     response = post_github(client)
 
     assert response.status_code == 202
-    body = response.json()
-    assert body["status"] == "accepted"
-    assert body["asset_events"].keys() == {
+    assert response.json()["outcome"] == "accepted"
+    (delivery,) = get_deliveries(session)
+    assert delivery.asset_events.keys() == {
         "github/my-org/web/pull_request/labeled/deploy-preview",
         "github/my-org/*/pull_request/labeled/deploy-preview",
         "github/*/pull_request/labeled/deploy-preview",
     }
-    assert len(body["candidates"]) == 9
+    assert len(delivery.candidates) == 9
     assert get_queued_dag_ids(session) == {"web_deploy_preview", "org_deploy_preview", "any_deploy_preview"}
     (delivery,) = get_deliveries(session)
     assert session.scalars(select(AssetEvent.extra)).first() == {
@@ -284,49 +296,36 @@ def test_api_docs_are_not_served(client, path):
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
-def test_non_ascii_label_matches_its_folded_name(client, subscribe):
+def test_non_ascii_label_matches_its_folded_name(client, session, subscribe):
     # MySQL stores asset names as latin1, so a name is only found there once folded to ASCII.
     subscribe("cafe_preview", "github/my-org/web/pull_request/labeled/Cafe")
 
-    response = post_github(client, {**LABELED, "label": {"name": "\U0001f680 Café"}})
+    post_github(client, {**LABELED, "label": {"name": "\U0001f680 Café"}})
 
-    assert response.json()["asset_events"].keys() == {"github/my-org/web/pull_request/labeled/Cafe"}
+    (delivery,) = get_deliveries(session)
+    assert delivery.asset_events.keys() == {"github/my-org/web/pull_request/labeled/Cafe"}
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
-def test_no_subscribers_is_acknowledged_with_candidates(client, session):
+def test_no_subscribers_is_acknowledged_and_its_candidates_recorded(client, session):
     response = post_github(client)
 
-    assert response.status_code == 202
-    assert response.json() == {
-        "status": "no_subscribers",
-        "outcome": "no_subscribers",
-        "delivery_id": "delivery-1",
-        "asset_events": {},
-        "candidates": [
-            "github/my-org/web/pull_request",
-            "github/my-org/*/pull_request",
-            "github/*/pull_request",
-            "github/my-org/web/pull_request/labeled",
-            "github/my-org/*/pull_request/labeled",
-            "github/*/pull_request/labeled",
-            "github/my-org/web/pull_request/labeled/deploy-preview",
-            "github/my-org/*/pull_request/labeled/deploy-preview",
-            "github/*/pull_request/labeled/deploy-preview",
-        ],
-    }
+    assert (response.status_code, response.json()["outcome"]) == (202, "no_subscribers")
+    (delivery,) = get_deliveries(session)
+    assert (delivery.asset_events, delivery.candidates) == ({}, LABELED_CANDIDATES)
     assert count_asset_events(session) == 0
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
-def test_no_subscribers_logs_candidates_at_debug_level(client, caplog):
+def test_no_subscribers_logs_candidates_at_debug_level(client, session, caplog):
     caplog.set_level(logging.DEBUG, logger=app.__name__)
 
-    candidates = post_github(client).json()["candidates"]
+    post_github(client)
 
+    (delivery,) = get_deliveries(session)
     records = [record for record in caplog.records if record.name == app.__name__]
     assert [(record.levelno, record.getMessage()) for record in records] == [
-        (logging.DEBUG, f"Webhook github: no Dag schedules on any of its candidates {candidates}")
+        (logging.DEBUG, f"Webhook github: no Dag schedules on any of its candidates {delivery.candidates}")
     ]
 
 
@@ -347,7 +346,7 @@ def test_gitlab_label_added_to_merge_request(client, session, subscribe):
     )
 
     assert response.status_code == 202
-    assert response.json()["status"] == "accepted"
+    assert response.json()["outcome"] == "accepted"
     assert get_queued_dag_ids(session) == {"api_deploy_preview"}
 
 
@@ -375,7 +374,7 @@ def test_jira_transition_stores_issue_summary(client, session, subscribe):
     )
 
     assert response.status_code == 202
-    assert response.json()["status"] == "accepted"
+    assert response.json()["outcome"] == "accepted"
     assert get_queued_dag_ids(session) == {"deploy_ready_issues"}
     (delivery,) = get_deliveries(session)
     assert session.scalars(select(AssetEvent.extra)).first() == {
@@ -565,7 +564,9 @@ def test_any_hmac_service_configured_from_connection_extra(client, session, subs
     )
 
     assert response.status_code == 202
-    assert response.json()["candidates"] == ["deploybot/billing/deployed", "deploybot/*/deployed"]
+    assert [delivery.candidates for delivery in get_deliveries(session)] == [
+        ["deploybot/billing/deployed", "deploybot/*/deployed"]
+    ]
     assert get_queued_dag_ids(session) == {"smoke_test_billing"}
 
 
@@ -583,7 +584,7 @@ def test_token_header_service_configured_from_connection_extra(client, session, 
     )
 
     assert response.status_code == 202
-    assert response.json()["candidates"] == ["huggingface/update"]
+    assert [delivery.candidates for delivery in get_deliveries(session)] == [["huggingface/update"]]
     assert get_queued_dag_ids(session) == {"evaluate_model"}
 
 
@@ -714,9 +715,10 @@ def test_delivery_is_not_acknowledged_when_its_events_are_not_stored(session, su
 def test_delivery_is_recorded_with_what_arrived(client, session, subscribe):
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
 
-    response = post_github(client)
+    post_github(client)
 
     (delivery,) = get_deliveries(session)
+    asset_event_id = session.scalars(select(AssetEvent.id)).one()
     assert delivery._asdict() == {
         "id": mock.ANY,
         "webhook": "github",
@@ -725,8 +727,8 @@ def test_delivery_is_recorded_with_what_arrived(client, session, subscribe):
         "received_at": mock.ANY,
         "source_type": "github",
         "path": "my-org/web",
-        "candidates": response.json()["candidates"],
-        "asset_events": response.json()["asset_events"],
+        "candidates": LABELED_CANDIDATES,
+        "asset_events": {"github/my-org/web/pull_request/labeled/deploy-preview": asset_event_id},
         "correlation_key": None,
         "outcome": "accepted",
         "team_name": None,
@@ -774,40 +776,42 @@ def test_generic_source_recognises_retries_by_the_delivery_id_it_is_configured_w
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
 def test_unmatched_delivery_keeps_its_names_but_not_its_payload(client, session):
-    response = post_github(client)
+    post_github(client)
 
     (delivery,) = get_deliveries(session)
     assert (delivery.outcome, delivery.candidates, delivery.payload) == (
         "no_subscribers",
-        response.json()["candidates"],
+        LABELED_CANDIDATES,
         None,
     )
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
-def test_retried_delivery_is_answered_as_before_and_not_recorded_again(client, session, subscribe):
+def test_retried_delivery_is_answered_as_a_duplicate_and_not_recorded_again(client, session, subscribe):
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
 
     first, retry = post_github(client), post_github(client)
 
     assert (first.status_code, retry.status_code) == (202, 200)
-    assert retry.json() == {**first.json(), "outcome": "duplicate"}
+    assert retry.json() == {"delivery_id": "delivery-1", "outcome": "duplicate"}
     assert count_asset_events(session) == 1
     assert len(get_deliveries(session)) == 1
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
-def test_retry_recorded_concurrently_gets_the_answer_of_the_delivery_it_repeats(client, session, subscribe):
+def test_retry_recorded_concurrently_is_answered_as_a_duplicate(client, session, subscribe):
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
-    first = post_github(client)
+    post_github(client)
+    (recorded,) = get_deliveries(session)
 
     retry = post_copy_that_lost_the_race(client)
 
-    assert retry.status_code == 200
-    assert retry.json() == {**first.json(), "outcome": "duplicate"}
-    (delivery,) = get_deliveries(session)
+    assert (retry.status_code, retry.json()) == (200, {"delivery_id": "delivery-1", "outcome": "duplicate"})
+    assert count_asset_events(session) == 1
+    # The row keeps the asset events of the delivery the retry repeats.
+    assert [delivery.asset_events for delivery in get_deliveries(session)] == [recorded.asset_events]
     # The one event left is the first copy's, so it links to the record that was kept.
-    assert session.scalars(select(AssetEvent.extra)).one()["inbound_delivery_id"] == delivery.id
+    assert session.scalars(select(AssetEvent.extra)).one()["inbound_delivery_id"] == recorded.id
 
 
 @needs_callback_sink
@@ -866,12 +870,12 @@ def test_listener_that_fails_after_the_commit_is_logged(client, session, subscri
 @mock.patch.dict(os.environ, GITHUB_CONN)
 def test_redelivery_after_subscribing_records_the_delivery(client, session, subscribe):
     # How the README's walkthrough ends: send the event once, subscribe to a name it offered, redeliver.
-    assert post_github(client).json()["status"] == "no_subscribers"
+    assert post_github(client).json()["outcome"] == "no_subscribers"
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
 
     redelivery = post_github(client)
 
-    assert (redelivery.status_code, redelivery.json()["status"]) == (202, "accepted")
+    assert (redelivery.status_code, redelivery.json()["outcome"]) == (202, "accepted")
 
     assert count_asset_events(session) == 1
     assert [(delivery.outcome, delivery.payload) for delivery in get_deliveries(session)] == [
@@ -910,25 +914,25 @@ def test_redelivery_records_the_team_its_events_are_now_attributed_to(
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
-def test_redelivery_recorded_meanwhile_gets_the_answer_of_the_copy_that_recorded_it(
-    client, session, subscribe
-):
+def test_redelivery_recorded_meanwhile_is_answered_as_a_duplicate(client, session, subscribe):
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
-    first = post_github(client)
+    post_github(client)
     (recorded,) = get_deliveries(session)
     find_delivery = app.find_delivery
 
     def find_before_the_other_copy_committed(*args):
         # The first lookup sees the row as it was before another copy recorded the delivery's events.
         if find.call_count == 1:
-            return mock.Mock(id=recorded.id, outcome="no_subscribers", asset_events={}, candidates=[])
+            return mock.Mock(id=recorded.id, outcome="no_subscribers")
         return find_delivery(*args)
 
     with mock.patch.object(app, "find_delivery", side_effect=find_before_the_other_copy_committed) as find:
         retry = post_github(client)
 
-    assert retry.status_code == 200
-    assert retry.json() == {**first.json(), "outcome": "duplicate"}
+    assert (retry.status_code, retry.json()) == (200, {"delivery_id": "delivery-1", "outcome": "duplicate"})
+    assert count_asset_events(session) == 1
+    # The row keeps the asset events of the copy that recorded them.
+    assert [delivery.asset_events for delivery in get_deliveries(session)] == [recorded.asset_events]
     assert session.scalars(select(AssetEvent.extra)).one()["inbound_delivery_id"] == recorded.id
 
 
@@ -1059,11 +1063,12 @@ def test_body_nested_up_to_the_limit_is_recorded_and_deeper_is_refused(
 def test_delivery_only_paused_dags_subscribe_to_records_nothing(client, session, subscribe):
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview", paused=True)
 
-    body = post_github(client).json()
+    assert post_github(client).json()["outcome"] == "dag_paused"
 
-    assert (body["status"], body["outcome"], body["asset_events"]) == ("no_subscribers", "dag_paused", {})
     assert count_asset_events(session) == 0
-    assert [delivery.outcome for delivery in get_deliveries(session)] == ["dag_paused"]
+    assert [(delivery.outcome, delivery.asset_events) for delivery in get_deliveries(session)] == [
+        ("dag_paused", {})
+    ]
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
@@ -1127,9 +1132,10 @@ def test_dag_scheduled_on_a_topic_is_queued_as_one_scheduled_on_its_asset(
     name = "github/my-org/web/pull_request/labeled/deploy-preview"
     store_dags(parse_dag_file(DEPLOY_PREVIEW_DAG.format(schedule=schedule)))
 
-    response = post_github(client)
+    assert post_github(client).json()["outcome"] == "accepted"
 
-    assert response.json()["asset_events"].keys() == {name}
+    (delivery,) = get_deliveries(session)
+    assert delivery.asset_events.keys() == {name}
     assert get_queued_dag_ids(session) == {"deploy_preview"}
     # The group is the only difference, and nothing that matches deliveries reads it.
     assert session.scalar(select(AssetModel.group).where(AssetModel.name == name)) == group
@@ -1175,20 +1181,21 @@ def test_draining_dag_is_no_live_subscriber(client, session, subscribe):
         pytest.param(True, 2, 200, "duplicate", id="retry"),
     ],
 )
-def test_response_says_what_became_of_the_delivery(
+def test_response_says_only_what_became_of_the_delivery(
     client, subscribe, subscribed, posts, expected_status, expected_outcome
 ):
+    # Senders show answers to people who need not be Airflow users, so the names a delivery offered
+    # and its asset events are only in its record.
     if subscribed:
         subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
 
     for _ in range(posts):
         response = post_github(client)
 
-    body = response.json()
-    assert (response.status_code, body["outcome"], body["delivery_id"]) == (
+    # In AIP-125's order, as the README shows it.
+    assert (response.status_code, list(response.json().items())) == (
         expected_status,
-        expected_outcome,
-        "delivery-1",
+        [("delivery_id", "delivery-1"), ("outcome", expected_outcome)],
     )
 
 
@@ -1550,7 +1557,7 @@ def test_connection_is_read_on_every_delivery(client, connection_lookups, config
 def test_recorded_delivery_is_written_to_the_audit_log(client, session, subscribe):
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
 
-    asset_events = post_github(client).json()["asset_events"]
+    post_github(client)
 
     (entry,) = get_audit_log(session)
     # No Dag or run: the scheduler creates the runs later.
@@ -1560,7 +1567,8 @@ def test_recorded_delivery_is_written_to_the_audit_log(client, session, subscrib
         None,
         None,
     )
-    assert json.loads(entry.extra) == {"delivery_id": "delivery-1", "asset_events": asset_events}
+    (delivery,) = get_deliveries(session)
+    assert json.loads(entry.extra) == {"delivery_id": "delivery-1", "asset_events": delivery.asset_events}
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)

@@ -22,8 +22,9 @@ documentation is in the [README](../README.md).
    parses the delivery into a path and kinds.
 5. `naming.build_candidate_names` turns those into every subscribable name.
 6. If the delivery table already holds the delivery's ID and body digest for this webhook, and that
-   delivery recorded events, it is a retry: it is answered `200` from that row, and nothing is written. A
-   delivery that recorded nothing is processed again, so a redelivery after subscribing records it.
+   delivery recorded events, it is a retry: it is answered `200` with the outcome `duplicate`, and
+   nothing is written. A delivery that recorded nothing is processed again, so a redelivery after
+   subscribing records it.
 7. One query finds which candidates are active assets that a Dag schedules on which is not stale,
    paused or draining, directly or through `Asset.ref(name=...)` or `Asset.ref(uri=...)`, which
    Airflow queues too. That is the test Airflow applies before it runs an asset's watchers, plus
@@ -38,14 +39,18 @@ documentation is in the [README](../README.md).
    attributed to now. The endpoint commits its own database session before responding, so
    `accepted` means the events and the row are stored. A copy of the delivery that arrives while the
    first is being recorded fails on the unique constraint, or for a redelivery on an update that
-   only matches a row with no events, which rolls back its events, and it is answered from the first
-   copy's row. A database that cannot be used, or lacks the delivery table, is a `503` with
-   `Retry-After`, logged at most once a minute.
+   only matches a row with no events, which rolls back its events, and it is answered as a retry. A
+   database that cannot be used, or lacks the delivery table, is a `503` with `Retry-After`,
+   logged at most once a minute.
 9. Once the transaction has committed, the endpoint sends the asset listener notifications that
    `register_asset_change` handed back through `callback_sink`, so listeners hear only of events
    that are stored. One that fails is logged, and the delivery is still answered as recorded.
    Airflow 3.1 and 3.2 have no `callback_sink` and notify listeners inside the transaction, so there
    a listener can hear of events that are rolled back, such as those of a copy that lost the race.
+10. The answer holds the delivery ID and the outcome, as AIP-125 proposes, and nothing else. Senders
+    show answers to people who need not be Airflow users, as GitHub's Recent Deliveries tab does,
+    and the asset events a delivery recorded would tell them which Dags exist. Its row keeps those
+    and the names it offered, for the deliveries page and API.
 
 The plugin never creates Dag runs; Airflow's own asset scheduling does.
 

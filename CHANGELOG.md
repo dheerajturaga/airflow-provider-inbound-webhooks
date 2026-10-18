@@ -12,11 +12,12 @@ breaking change, listed under "Changed event names" with the old and new names.
 
 - Delivery records: every verified delivery is stored in a new table, `inbound_webhooks_delivery`,
   in the transaction that records its asset events. A retry, which repeats the sender's delivery ID
-  and the body, gets the answer the delivery got and records nothing, so a service's retries no
-  longer queue Dags again. A redelivery of a delivery that recorded nothing is processed again. A
+  and the body, is answered as a duplicate and records nothing, so a service's retries no longer
+  queue Dags again. A redelivery of a delivery that recorded nothing is processed again. A
   delivery ID longer than 255 characters is refused with `400`, and an empty one counts as none.
-- `outcome` and `delivery_id` in every answer. `outcome` is `accepted`, `no_subscribers`,
-  `dag_paused`, or `duplicate` for a retry, which is answered `200` instead of `202`.
+- `delivery_id` and `outcome`, which make up every answer. `outcome` is `accepted`,
+  `no_subscribers`, `dag_paused`, or `duplicate` for a retry, which is answered `200` instead of
+  `202`.
 - `from_webhook`, `webhook`, `source_type`, `inbound_delivery_id` and `correlation_key` in each
   asset event's `extra`, the keys AIP-125 proposes for webhook events. `inbound_delivery_id` is the
   ID of the delivery's record, so an event leads back to its delivery while the record is kept, even
@@ -97,6 +98,13 @@ breaking change, listed under "Changed event names" with the old and new names.
   a sender that retries kept sending it; one nested about 255 levels deep was recorded in asset
   events that Airflow's REST API cannot return; and one nested a little less deeply than Python can
   parse was answered with `500`.
+- Answers no longer hold `status`, `asset_events` and `candidates`, as AIP-125 proposes. Services
+  show answers to people who need not be Airflow users, as GitHub's **Recent Deliveries** and
+  GitLab's **Recent events** do, and the asset events a delivery recorded would tell them which
+  Dags exist. Delivery records keep the asset events and the names each delivery offered, which
+  **Browse → Webhook deliveries**, `GET /webhooks/_deliveries/<name>/<id>` and
+  `airflow webhooks deliveries <name> --id <id>` show. Read `outcome` instead of `status`, which
+  only said whether asset events were recorded.
 
 ### Deprecated
 

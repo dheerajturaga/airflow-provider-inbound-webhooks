@@ -18,6 +18,7 @@ import signal
 import socket
 import subprocess
 import sys
+import textwrap
 import time
 import urllib.error
 import urllib.request
@@ -141,11 +142,14 @@ def test_signed_delivery_queues_subscribed_dag(api_server_url, session, subscrib
 
     status, body = post_github(api_server_url)
 
-    assert (status, body["status"], list(body["asset_events"])) == (202, "accepted", [ASSET_NAME])
+    assert (status, body) == (202, {"delivery_id": None, "outcome": "accepted"})
     assert [extra["source"] for extra in session.scalars(select(AssetEvent.extra))] == ["github"]
     assert list(session.scalars(select(AssetDagRunQueue.target_dag_id))) == ["web_deploy_preview"]
     # The table exists where Airflow put it, and the API server process can write to it.
-    assert list(session.scalars(select(delivery_table.c.outcome))) == ["accepted"]
+    deliveries = session.execute(select(delivery_table.c.outcome, delivery_table.c.asset_events))
+    assert [(outcome, list(asset_events)) for outcome, asset_events in deliveries] == [
+        ("accepted", [ASSET_NAME])
+    ]
 
 
 def test_wrong_secret_is_rejected(api_server_url, session, subscribe, webhook_connection):
@@ -268,7 +272,8 @@ def test_readme_quick_start(api_server_url, session, subscribe, webhook_connecti
     result = send_test_event(f"{api_server_url}/webhooks/demo", {"event": "deployed", "service": "billing"})
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '"status":"accepted"' in result.stdout
+    # The output the README shows, indented as in its list of steps.
+    assert textwrap.indent(result.stdout, "   ") in (Path(__file__).parents[1] / "README.md").read_text()
     assert list(session.scalars(select(AssetDagRunQueue.target_dag_id))) == ["smoke_test_billing"]
 
 

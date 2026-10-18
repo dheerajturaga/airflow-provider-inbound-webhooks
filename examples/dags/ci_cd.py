@@ -3,7 +3,8 @@
 """
 Dag author's side: schedule on an event by its name, ``<webhook>/<path>/<event>/<action>/<detail>``.
 
-Not sure of a name? Trigger the event once and copy it from ``candidates`` in the delivery's response.
+Not sure of a name? Trigger the event once and copy one of the names it offered from its delivery
+under Browse → Webhook deliveries in the Airflow UI.
 """
 
 from __future__ import annotations
