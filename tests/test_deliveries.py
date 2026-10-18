@@ -23,6 +23,7 @@ from sqlalchemy import select
 
 from airflow_inbound_webhooks import app, deliveries
 from airflow_inbound_webhooks.app import build_app
+from airflow_inbound_webhooks.sources import MAX_JSON_DEPTH
 
 pytestmark = pytest.mark.usefixtures("clean_db")
 
@@ -168,9 +169,9 @@ def test_one_delivery_comes_with_its_payload(client, add_delivery):
     assert client.get(f"/_deliveries/gitlab/{delivery}").status_code == 404
 
 
-def post_labeled(client: TestClient) -> None:
-    """Deliver LABELED to the github webhook, signed with its connection's secret."""
-    body = json.dumps(LABELED).encode()
+def post_labeled(client: TestClient, payload: dict = LABELED) -> None:
+    """Deliver ``payload`` to the github webhook, signed with its connection's secret."""
+    body = json.dumps(payload).encode()
     headers = {
         "content-type": "application/json",
         "X-GitHub-Event": "pull_request",
@@ -201,6 +202,20 @@ def test_payload_left_out_of_an_asset_event_is_found_with_its_delivery(client, s
     delivery = client.get(f"/_deliveries/github/{extra['inbound_delivery_id']}").json()
 
     assert (extra["payload"], extra["payload_truncated"], delivery["payload"]) == (None, True, LABELED)
+
+
+def test_payload_nested_as_deeply_as_allowed_is_shown(client, session, subscribe):
+    # The API encodes the payload, and the page indents it, each walking it once per level.
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    payload = {**LABELED, "added": json.loads("[" * (MAX_JSON_DEPTH - 1) + "]" * (MAX_JSON_DEPTH - 1))}
+    post_labeled(client, payload)
+    (extra,) = session.scalars(select(AssetEvent.extra))
+
+    delivery = client.get(f"/_deliveries/github/{extra['inbound_delivery_id']}")
+    page = client.get(f"/_ui/deliveries/github/{extra['inbound_delivery_id']}")
+
+    assert (delivery.status_code, delivery.json()["payload"]) == (200, payload)
+    assert page.status_code == 200
 
 
 @mock.patch.dict(os.environ, {"AIRFLOW__INBOUND_WEBHOOKS__WEBHOOK_NAMES": "github,gitlab"})

@@ -77,6 +77,12 @@ breaking change, listed under "Changed event names" with the old and new names.
   fails is logged. On 3.1 and 3.2, Airflow still notifies them inside the transaction.
 - The `path` in each asset event's `extra` is cut to 1500 characters, as in the delivery record: a
   longer path cannot be part of an asset name.
+- A JSON body holding a number too large to store, such as `1e400`, which Python reads as infinity,
+  is answered with `400`, as one holding `Infinity` is. Before, it was recorded, and stored as
+  `Infinity` where the database accepted it.
+- A JSON body that nests objects and arrays more than 100 levels deep is answered with `400`.
+  Before, one nested about 255 levels deep was recorded in asset events that Airflow's REST API
+  cannot return, and one nested a little less deeply than Python can parse was answered with `500`.
 
 ### Deprecated
 
