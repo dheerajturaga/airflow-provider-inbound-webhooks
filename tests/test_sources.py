@@ -18,6 +18,7 @@ from airflow_inbound_webhooks.sources import (
     JiraSource,
     TokenHeaderSource,
     WebhookVerificationError,
+    load_json_object,
 )
 
 SECRET = "s3cret"
@@ -574,3 +575,12 @@ def test_signed_delivery_of_any_shape_is_named_or_refused(source, headers, paylo
             assert parsed.path is None or isinstance(parsed.path, str), (field, value)
             assert all(isinstance(segment, str) for kind in parsed.kinds for segment in kind), (field, value)
             build_candidate_names("hooks", parsed)
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_json_constants_json_does_not_allow_are_refused(constant):
+    # Python's json accepts them, but they are not JSON, and MySQL refuses to store them.
+    body = f'{{"event": "deployed", "value": {constant}}}'.encode()
+
+    with pytest.raises(ValueError, match="which JSON does not allow"):
+        load_json_object(Headers(JSON), body)

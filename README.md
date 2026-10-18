@@ -644,6 +644,7 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
 |---|---|---|
 | `webhook_names` | empty | Comma-separated names of the webhooks to serve, such as `github,jira`. Requests for any other name are answered with `404` without looking up a connection. Empty serves no webhook, and the API server log says so once. `*` serves any name and reads its connection on every delivery, which lets anyone who can reach the endpoint make a call to your secrets backend. Changes need an API server restart. |
 | `connection_cache_ttl` | `60` | Seconds a listed webhook's connection is reused before it is read again, including a missing or misconfigured one. A rotated secret or changed option takes up to this long to apply. `0` reads the connection on every delivery. |
+| `rate_limit_per_minute` | `0` | Verified deliveries each API server worker records per webhook and minute; more are answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification do not count, so they cannot use the limit up. Each worker counts on its own, so N workers record up to N times as many. GitLab disables a webhook after four failed deliveries in a row, `429` included, so set the limit above what a GitLab webhook sends. `0` turns the limit off. |
 
 ### Delivery records
 
@@ -664,16 +665,27 @@ both need [`external_db_managers`](#compatibility). `airflow db clean` does not 
 
 ### Responses and troubleshooting
 
+A `202` answer has these fields:
+
+| Field | Meaning |
+|---|---|
+| `status` | `accepted` if any asset event was recorded, otherwise `no_subscribers` |
+| `outcome` | What became of the delivery: `events_recorded`, `no_subscribers`, or `duplicate` for a retry, which records nothing and repeats the rest of its first answer |
+| `delivery_id` | The sender's ID for the delivery, or `null` if it sends none |
+| `asset_events` | The asset event recorded on each subscribed name |
+| `candidates` | Every name the delivery offered |
+
 | Status | Meaning | What to check |
 |---|---|---|
-| `202` `accepted` | Recorded; `asset_events` lists the asset event per subscribed name. A retry gets the same answer and records nothing | If no Dag run starts, the Dag is paused |
+| `202` `accepted` | Recorded; `asset_events` lists the asset event per subscribed name | If no Dag run starts, the Dag is paused |
 | `202` `no_subscribers` | Verified, but no Dag schedules on any of the `candidates`, so no asset event is recorded | The Dag schedules on one of the `candidates` and has been parsed: `airflow dags reserialize` parses it now. The API server logs the `candidates` at debug level |
-| `400` | The body is not a JSON object, the event name is missing, or the delivery ID is longer than 255 characters | GitHub: the content type is `application/json`. Jira: *Exclude body* is unchecked |
+| `400` | The body is not a JSON object or holds `NaN` or `Infinity`, which JSON does not allow, the event name is missing, or the delivery ID is longer than 255 characters | GitHub: the content type is `application/json`. Jira: *Exclude body* is unchecked |
 | `401` | Signature or token does not match | The secret in the service equals the connection's password |
-| `404` | No such webhook: the name is not in `webhook_names`, or has no `webhook_<name>` connection | The name is in `webhook_names` and the API server was restarted after it changed; the connection ID is `webhook_` plus the name in the URL |
+| `404` | No such webhook: the name is not in `webhook_names`, or has no `webhook_<name>` connection | The name is in `webhook_names` and the API server was restarted after it changed; the connection ID is `webhook_` plus the name in the URL. Airflow's connection lookup also reports a database or secrets backend it could not read as a missing connection, which is then reused for `connection_cache_ttl` |
 | `405` | The plugin is not loaded, so Airflow's UI answers | Restart the API server after installing; `airflow plugins` lists `webhooks` |
 | `413` | Body larger than `max_body_bytes` | Raise `max_body_bytes` in the connection |
-| `503` | The connection is misconfigured | The API server log says why |
+| `429` | More verified deliveries than `rate_limit_per_minute` allows; `Retry-After` says when to try again | Raise `rate_limit_per_minute`, or have the sender send fewer events |
+| `503` | The connection is misconfigured, the database is unavailable, or the delivery table is missing; database failures carry `Retry-After` | The API server log says why. For the delivery table, run `airflow db migrate` |
 
 ## Security
 
@@ -687,7 +699,9 @@ both need [`external_db_managers`](#compatibility). `airflow db clean` does not 
   `webhook_names` to `*` gives this up.
 - **Expose only your webhooks.** If the API server must be reachable by an external service, put a
   reverse proxy in front that forwards only their paths, such as `/webhooks/github`, rather than
-  exposing the whole Airflow UI and API, and have it rate-limit them.
+  exposing the whole Airflow UI and API, and have it rate-limit them. `rate_limit_per_minute` also
+  limits each webhook's verified deliveries in each API server worker, which bounds what a chatty
+  sender writes; requests that fail verification never count against it.
 - **Use HTTPS.** It matters most for `token_header` and GitLab, where the secret itself travels in a
   header.
 - **Use strong secrets, ideally from a secrets backend,** which keeps them out of the metadata
@@ -729,8 +743,9 @@ Each test run starts the real `airflow api-server` and sends it signed deliverie
 
 From 0.1.0 the project follows [Semantic Versioning](https://semver.org/) for its public interfaces:
 
-- the endpoint `POST /webhooks/<name>`: its status codes, and the `status`, `asset_events` and
-  `candidates` fields of its responses;
+- the endpoint `POST /webhooks/<name>`: its status codes, the `Retry-After` header of `429` and
+  `503` answers, and the `status`, `outcome`, `delivery_id`, `asset_events` and `candidates` fields
+  of its responses;
 - the `inbound_webhook` connection type, the connection options of each source type and the
   `[inbound_webhooks]` configuration options;
 - [event names](#event-names);

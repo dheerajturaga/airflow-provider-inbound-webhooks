@@ -8,11 +8,12 @@ import functools
 import hashlib
 import inspect
 import logging
+import math
 import re
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Annotated, Any, cast
@@ -22,11 +23,16 @@ from airflow.exceptions import AirflowNotFoundException
 from airflow.sdk import Connection
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError, ProgrammingError
 
 from airflow_inbound_webhooks import configuration
 from airflow_inbound_webhooks.naming import build_candidate_names
-from airflow_inbound_webhooks.sources import SOURCE_TYPES, WebhookSource, WebhookVerificationError
+from airflow_inbound_webhooks.sources import (
+    SOURCE_TYPES,
+    WebhookEvent,
+    WebhookSource,
+    WebhookVerificationError,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import CursorResult, Row
@@ -41,6 +47,12 @@ WEBHOOK_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 MAX_DELIVERY_ID_LENGTH = 255
 MAX_PATH_LENGTH = 1500
 MAX_TEAM_NAME_LENGTH = 50
+# The response's outcome for a retry, which writes no row; other outcomes are stored on the row.
+DUPLICATE = "duplicate"
+# The database is down or locked. SQLite also reports a missing table this way; PostgreSQL and MySQL
+# report one as a ProgrammingError, which is only answered as unavailable when the table is missing.
+UNAVAILABLE_DATABASE_ERRORS = (OperationalError, InterfaceError)
+UNAVAILABLE_RETRY_AFTER_SECONDS = 30
 # register_asset_change accepts and drops unknown keyword arguments, so an argument a later Airflow
 # renamed would be lost silently instead of failing. The team arguments only exist from Airflow 3.3.
 REQUIRED_ASSET_CHANGE_ARGUMENTS = frozenset({"asset", "extra", "session"})
@@ -199,6 +211,45 @@ def get_configured_webhook(name: str) -> ConfiguredWebhook:
 WebhookDep = Annotated[ConfiguredWebhook, Depends(get_configured_webhook)]
 
 
+@dataclass
+class TokenBucket:
+    """The deliveries one webhook can still make in this process, refilled continuously to the limit."""
+
+    tokens: float
+    updated_at: float
+
+
+# One per webhook that resolved to a connection, so unlisted names never add one.
+rate_limit_buckets: dict[str, TokenBucket] = {}
+rate_limit_lock = threading.Lock()
+
+
+def limit_rate(webhook: ConfiguredWebhook) -> None:
+    """
+    Refuse a verified delivery over ``rate_limit_per_minute``, before it writes anything.
+
+    Only verified deliveries count: a bucket that unsigned requests could empty would let anyone refuse
+    the sender's own deliveries, and GitLab disables a webhook whose deliveries keep failing.
+    """
+    limit = conf.getint(configuration.SECTION, configuration.RATE_LIMIT_PER_MINUTE, fallback=0)
+    if limit <= 0:
+        return
+    now = time.monotonic()
+    with rate_limit_lock:
+        bucket = rate_limit_buckets.setdefault(webhook.name, TokenBucket(tokens=limit, updated_at=now))
+        bucket.tokens = min(limit, bucket.tokens + (now - bucket.updated_at) * limit / 60)
+        bucket.updated_at = now
+        if bucket.tokens >= 1:
+            bucket.tokens -= 1
+            return
+        retry_after = math.ceil((1 - bucket.tokens) * 60 / limit)
+    # Debug only: logging every refused delivery would let a flood fill the log.
+    log.debug("Webhook %s is over its rate limit of %d deliveries a minute", webhook.name, limit)
+    raise HTTPException(
+        HTTPStatus.TOO_MANY_REQUESTS, "Too many deliveries", headers={"Retry-After": str(retry_after)}
+    )
+
+
 async def read_limited_body(request: Request, webhook: WebhookDep) -> bytes:
     too_large = HTTPException(
         HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"Body exceeds {webhook.max_body_bytes} bytes"
@@ -212,6 +263,38 @@ async def read_limited_body(request: Request, webhook: WebhookDep) -> bytes:
         if len(body) > webhook.max_body_bytes:
             raise too_large
     return bytes(body)
+
+
+class LogThrottle:
+    """Lets a message through at most once per interval, so a failure on every request logs once."""
+
+    def __init__(self, interval: float) -> None:
+        self.interval = interval
+        self.last = -math.inf
+        self.lock = threading.Lock()
+
+    def ready(self) -> bool:
+        now = time.monotonic()
+        with self.lock:
+            if now - self.last < self.interval:
+                return False
+            self.last = now
+            return True
+
+
+database_error_log = LogThrottle(interval=60)
+
+
+def has_delivery_table() -> bool:
+    from airflow import settings
+    from sqlalchemy import inspect as inspect_database
+
+    from airflow_inbound_webhooks.models import delivery_table
+
+    if settings.engine is None:
+        return False
+    with settings.engine.connect() as connection:
+        return inspect_database(connection).has_table(delivery_table.name, schema=delivery_table.schema)
 
 
 class RecordedMeanwhile(Exception):
@@ -241,26 +324,25 @@ def find_delivery(
     ).one_or_none()
 
 
-def build_response(asset_events: dict[str, int], candidates: list[str]) -> dict[str, Any]:
+def build_response(
+    delivery_id: str | None, outcome: str, asset_events: dict[str, int], candidates: list[str]
+) -> dict[str, Any]:
     return {
         "status": "accepted" if asset_events else "no_subscribers",
+        "outcome": outcome,
+        "delivery_id": delivery_id,
         "asset_events": asset_events,
         "candidates": candidates,
     }
 
 
-router = APIRouter()
+def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest: str) -> dict[str, Any]:
+    """
+    Record a verified delivery's asset events and its row in one transaction, and answer it.
 
-
-# Also with a trailing slash: otherwise the router answers it with a redirect, which senders such as
-# GitHub do not follow, so a URL pasted with a slash would fail every delivery.
-@router.post("/{name}/", status_code=HTTPStatus.ACCEPTED)
-@router.post("/{name}", status_code=HTTPStatus.ACCEPTED)
-def receive_webhook(
-    request: Request,
-    webhook: WebhookDep,
-    body: Annotated[bytes, Depends(read_limited_body)],
-) -> dict[str, Any]:
+    A retry, which repeats a delivery that recorded events, gets the answer that delivery got and
+    records nothing. A delivery that recorded nothing is processed again.
+    """
     # Imported here rather than at module level: Airflow imports plugins in every process, including
     # each task run, and only the API server needs these.
     from airflow.assets.manager import asset_manager
@@ -269,28 +351,11 @@ def receive_webhook(
 
     from airflow_inbound_webhooks.models import EVENTS_RECORDED, NO_SUBSCRIBERS, delivery_table
 
-    try:
-        webhook.source.verify(request.headers, body, webhook.secret)
-    except WebhookVerificationError as e:
-        log.warning("Rejected delivery for webhook %s: %s", webhook.name, e)
-        raise HTTPException(HTTPStatus.UNAUTHORIZED, "Invalid webhook credentials") from e
-    try:
-        event = webhook.source.parse(request.headers, body)
-    except ValueError as e:
-        raise HTTPException(HTTPStatus.BAD_REQUEST, str(e)) from e
-    # An empty header is no delivery ID; it would make every later delivery without one a retry.
-    delivery_id = event.delivery_id or None
-    if delivery_id is not None and len(delivery_id) > MAX_DELIVERY_ID_LENGTH:
-        raise HTTPException(
-            HTTPStatus.BAD_REQUEST, f"Delivery ID is longer than {MAX_DELIVERY_ID_LENGTH} characters"
-        )
-    body_digest = hashlib.sha256(body).hexdigest()
-
     candidates = build_candidate_names(webhook.name, event)
     extra = {
         "source": webhook.name,
         "path": event.path,
-        "delivery_id": delivery_id,
+        "delivery_id": event.delivery_id,
         "payload": event.payload,
     }
     team_arguments: dict[str, Any] = (
@@ -303,12 +368,14 @@ def receive_webhook(
         # Leaving the block commits, so a delivery is only acknowledged once its events and its row are
         # stored, which is also what lets a retry find the row.
         with create_session(scoped=False) as session:
-            original = find_delivery(session, webhook.name, delivery_id, body_digest)
+            original = find_delivery(session, webhook.name, event.delivery_id, body_digest)
             # A retry. A delivery that recorded nothing is processed again instead: a redelivery after
             # subscribing to one of its names is how its README walkthrough ends.
             if original is not None and original.outcome == EVENTS_RECORDED:
-                log.debug("Webhook %s: delivery %r was recorded before", webhook.name, delivery_id)
-                return build_response(original.asset_events, original.candidates)
+                log.debug("Webhook %s: delivery %r was recorded before", webhook.name, event.delivery_id)
+                return build_response(
+                    event.delivery_id, DUPLICATE, original.asset_events, original.candidates
+                )
             subscribed = session.scalars(
                 select(AssetModel).where(AssetModel.name.in_(candidates), AssetModel.active.has())
             ).all()
@@ -318,10 +385,11 @@ def receive_webhook(
                 )
                 if asset_event is not None:
                     asset_events[asset_model.name] = asset_event.id
+            outcome = EVENTS_RECORDED if asset_events else NO_SUBSCRIBERS
             recorded = {
                 "candidates": candidates,
                 "asset_events": asset_events,
-                "outcome": EVENTS_RECORDED if asset_events else NO_SUBSCRIBERS,
+                "outcome": outcome,
                 # A delivery no Dag subscribes to keeps its names, for troubleshooting, but not its
                 # payload, so a sender that sends every event does not fill the table.
                 "payload": event.payload if asset_events else None,
@@ -331,7 +399,7 @@ def receive_webhook(
                     delivery_table.insert().values(
                         id=str(uuid.uuid4()),
                         webhook=webhook.name,
-                        delivery_id=delivery_id,
+                        delivery_id=event.delivery_id,
                         body_digest=body_digest,
                         received_at=datetime.now(tz=timezone.utc),
                         source_type=webhook.source_type,
@@ -355,14 +423,68 @@ def receive_webhook(
         # A copy that arrived while another was being recorded: rolling back the transaction undid its
         # events, and it gets the answer that copy got.
         with create_session(scoped=False) as session:
-            original = find_delivery(session, webhook.name, delivery_id, body_digest)
+            original = find_delivery(session, webhook.name, event.delivery_id, body_digest)
         if original is None:
             raise
-        return build_response(original.asset_events, original.candidates)
+        return build_response(event.delivery_id, DUPLICATE, original.asset_events, original.candidates)
     if not asset_events:
         # Debug only: a webhook that sends every event would otherwise log most deliveries.
         log.debug("Webhook %s: no Dag schedules on any of its candidates %s", webhook.name, candidates)
-    return build_response(asset_events, candidates)
+    return build_response(event.delivery_id, outcome, asset_events, candidates)
+
+
+router = APIRouter()
+
+
+# Also with a trailing slash: otherwise the router answers it with a redirect, which senders such as
+# GitHub do not follow, so a URL pasted with a slash would fail every delivery.
+@router.post("/{name}/", status_code=HTTPStatus.ACCEPTED)
+@router.post("/{name}", status_code=HTTPStatus.ACCEPTED)
+def receive_webhook(
+    request: Request,
+    webhook: WebhookDep,
+    body: Annotated[bytes, Depends(read_limited_body)],
+) -> dict[str, Any]:
+    try:
+        webhook.source.verify(request.headers, body, webhook.secret)
+    except WebhookVerificationError as e:
+        log.warning("Rejected delivery for webhook %s: %s", webhook.name, e)
+        raise HTTPException(HTTPStatus.UNAUTHORIZED, "Invalid webhook credentials") from e
+    except Exception as e:
+        # Answered as a failed verification, so what made the verifier fail cannot be told from outside.
+        log.exception("Rejected delivery for webhook %s: verifying it raised", webhook.name)
+        raise HTTPException(HTTPStatus.UNAUTHORIZED, "Invalid webhook credentials") from e
+    limit_rate(webhook)
+    try:
+        event = webhook.source.parse(request.headers, body)
+    except ValueError as e:
+        raise HTTPException(HTTPStatus.BAD_REQUEST, str(e)) from e
+    # An empty header is no delivery ID; it would make every later delivery without one a retry.
+    event = replace(event, delivery_id=event.delivery_id or None)
+    if event.delivery_id is not None and len(event.delivery_id) > MAX_DELIVERY_ID_LENGTH:
+        raise HTTPException(
+            HTTPStatus.BAD_REQUEST, f"Delivery ID is longer than {MAX_DELIVERY_ID_LENGTH} characters"
+        )
+    try:
+        return record_delivery(webhook, event, hashlib.sha256(body).hexdigest())
+    except (*UNAVAILABLE_DATABASE_ERRORS, ProgrammingError) as e:
+        # A ProgrammingError that is not about a missing table is a bug, which a sender's retries would
+        # not fix.
+        if isinstance(e, ProgrammingError) and has_delivery_table():
+            raise
+        # Once a minute at most: while the database is down, every delivery fails the same way.
+        if database_error_log.ready():
+            log.exception(
+                "Webhook %s: could not record a delivery. Check that the database is reachable and that "
+                "airflow db migrate has created the delivery table",
+                webhook.name,
+            )
+        # A status senders retry, and no detail, which would tell anyone about the database.
+        raise HTTPException(
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            "Temporarily unavailable",
+            headers={"Retry-After": str(UNAVAILABLE_RETRY_AFTER_SECONDS)},
+        ) from e
 
 
 def build_app() -> FastAPI:
