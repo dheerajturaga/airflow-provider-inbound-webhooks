@@ -154,6 +154,27 @@ def parse_dag_file(tmp_path):
 
 
 @pytest.fixture
+def registered_policy():
+    """Have Airflow call the package's cluster policy, as its entry point makes it once installed."""
+    from airflow import settings
+
+    from airflow_inbound_webhooks import policy
+
+    # Airflow 3.1 keeps the policy plugin manager in a module global.
+    if hasattr(settings, "get_policy_plugin_manager"):
+        manager = settings.get_policy_plugin_manager()
+    else:
+        manager = settings.POLICY_PLUGIN_MANAGER
+    # A package whose installed metadata predates the entry point has not been registered.
+    if manager.is_registered(policy):
+        yield
+        return
+    manager.register(policy)
+    yield
+    manager.unregister(policy)
+
+
+@pytest.fixture
 def store_dags(session):
     """Store a DagBag's Dags, their assets and what they schedule on, as the Dag processor does."""
 

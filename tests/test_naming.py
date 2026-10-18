@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from airflow_inbound_webhooks.naming import build_candidate_names, can_be_offered
+from airflow_inbound_webhooks.naming import build_candidate_names, can_be_offered, can_be_offered_together
 from airflow_inbound_webhooks.sources import WebhookEvent
 
 
@@ -179,3 +179,94 @@ def test_name_a_delivery_can_offer(name):
 )
 def test_name_no_delivery_can_offer(name):
     assert not can_be_offered(name)
+
+
+@pytest.mark.parametrize(
+    ("name", "other", "delivery"),
+    [
+        pytest.param(
+            "github/my-org/web/pull_request",
+            "github/my-org/web/pull_request/labeled",
+            build_event("my-org/web", ("pull_request", "labeled", "deploy-preview")),
+            id="name-and-its-prefix",
+        ),
+        pytest.param(
+            "github/my-org/web/push",
+            "github/my-org/*/push",
+            build_event("my-org/web", ("push", "main")),
+            id="path-and-its-wildcard",
+        ),
+        pytest.param(
+            "github/my-org/web/push",
+            "github/*/push",
+            build_event("my-org/web", ("push", "main")),
+            id="path-and-any-path",
+        ),
+        pytest.param(
+            "github/my-org/*/push",
+            "github/*/push",
+            build_event("my-org/web", ("push", "main")),
+            id="two-wildcards-of-one-path",
+        ),
+        pytest.param(
+            "github/my-org/web/push",
+            "github/*/push/main",
+            build_event("my-org/web", ("push", "main")),
+            id="wildcard-and-prefix-at-once",
+        ),
+        pytest.param(
+            "gitlab/platform/backend/*/pipeline",
+            "gitlab/platform/*/pipeline/success",
+            build_event("platform/backend/api", ("pipeline", "success")),
+            id="deeper-wildcards",
+        ),
+        pytest.param(
+            "github/my-org/*/organization",
+            "github/*/organization/member_added",
+            build_event("my-org/*", ("organization", "member_added")),
+            id="organization-event",
+        ),
+        pytest.param(
+            "github/installation",
+            "github/installation/created",
+            build_event(None, ("installation", "created")),
+            id="without-a-path",
+        ),
+    ],
+)
+def test_names_one_delivery_offers_together(name, other, delivery):
+    assert {name, other} <= set(build_candidate_names(name.partition("/")[0], delivery))
+    assert can_be_offered_together(name, other)
+    assert can_be_offered_together(other, name)
+
+
+@pytest.mark.parametrize(
+    ("name", "other"),
+    [
+        pytest.param(
+            "github/my-org/web/pull_request/opened", "github/my-org/web/pull_request/reopened", id="actions"
+        ),
+        pytest.param("github/my-org/web/push/main", "github/*/push/develop", id="branches"),
+        pytest.param("github/my-org/web/push", "github/my-org/api/push", id="repositories"),
+        pytest.param("github/my-org/*/push", "github/other-org/*/push", id="organizations"),
+        pytest.param("github/my-org/web/push", "github/my-org/web/*/push", id="path-and-paths-below-it"),
+        pytest.param("github/*/push", "github/push", id="with-and-without-a-path"),
+        pytest.param("github/my-org/web/push", "gitlab/my-org/web/push", id="webhooks"),
+        # A Jira update that changes the status and adds the label offers both, through two kinds.
+        pytest.param(
+            "jira/OPS/issue_updated/status/Done",
+            "jira/OPS/issue_updated/labeled/hotfix",
+            id="different-kinds-not-detected",
+        ),
+    ],
+)
+def test_names_no_delivery_offers_together_through_one_kind(name, other):
+    assert not can_be_offered_together(name, other)
+    assert not can_be_offered_together(other, name)
+
+
+def test_segment_holding_a_slash_is_compared_as_two():
+    # GitHub offers these for two labels, never for one delivery, but names alone cannot tell.
+    assert can_be_offered_together(
+        "github/my-org/web/pull_request/labeled/kind", "github/my-org/web/pull_request/labeled/kind/bug"
+    )

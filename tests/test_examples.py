@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import os
 import re
 import runpy
 import textwrap
@@ -44,6 +45,16 @@ def test_example_dags_skip_payloads_left_out_of_their_events(file_name, read_pay
     triggering_asset_events = {"asset": [build_event(2, payload), build_event(1, None)]}
 
     assert module_globals[read_payloads](triggering_asset_events, "asset") == [expected]
+
+
+@pytest.mark.usefixtures("registered_policy")
+@pytest.mark.parametrize("path", EXAMPLE_DAGS, ids=[path.name for path in EXAMPLE_DAGS])
+def test_example_dag_file_passes_the_topic_checks(parse_dag_file, path):
+    with mock.patch.dict(os.environ, {"AIRFLOW__INBOUND_WEBHOOKS__DAG_CHECKS": "error"}):
+        bag = parse_dag_file(path.read_text())
+
+    assert bag.import_errors == {}
+    assert bag.dags
 
 
 def test_readme_quick_start_writes_the_example_dag():

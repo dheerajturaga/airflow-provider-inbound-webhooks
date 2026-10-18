@@ -88,3 +88,63 @@ def can_be_offered(name: str) -> bool:
     """
     webhook_name, _, rest = name.partition("/")
     return bool(WEBHOOK_NAME_PATTERN.fullmatch(webhook_name) and rest and normalize_segment(rest) == rest)
+
+
+def can_be_offered_together(name: str, other: str) -> bool:
+    """
+    Return whether one delivery can offer both names through one of its kinds.
+
+    A delivery offers ``<webhook name>/<scope>/<kind prefix>`` for each scope, its path or that path
+    with ``*`` in place of trailing segments, and each prefix of each kind. Taking every ``/`` as a
+    segment boundary, two names are offered together when they have the same webhook name, and the
+    rest of each splits into a scope and a kind such that:
+
+    - the scopes are offered for one path: both empty, for a delivery without one; the same path; a
+      path and that path with ``*`` in place of some of its trailing segments (``my-org/web`` and
+      ``my-org/*`` or ``*``); or two such wildcard paths (``my-org/*`` and ``*``); and
+    - one kind is the other or a prefix of it (``push`` and ``push/main``).
+
+    That covers a name and its prefix, a name and its wildcard form, and names that differ in both,
+    such as ``github/my-org/web/push`` and ``github/*/push/main``: a push to ``main`` of
+    ``my-org/web`` offers both.
+
+    Two limits come from comparing names alone. A delivery with several kinds, such as a Jira update
+    that changes a status and adds a label, also offers names of different kinds together, which is
+    not detected: source types that send one kind per delivery never offer such names together, as
+    for GitHub's ``opened`` and ``reopened``. And a segment that holds a ``/``, such as the label
+    ``kind/bug``, is taken as two, so the labels ``kind`` and ``kind/bug`` count as offered together
+    although GitHub offers them for different deliveries.
+    """
+    webhook_name, _, rest = name.partition("/")
+    other_webhook_name, _, other_rest = other.partition("/")
+    if webhook_name != other_webhook_name:
+        return False
+    parts, other_parts = rest.split("/"), other_rest.split("/")
+    # Each split leaves at least one kind segment, as every offered name has.
+    return any(
+        are_scopes_of_one_path(parts[:start], other_parts[:other_start])
+        and is_prefix_pair(parts[start:], other_parts[other_start:])
+        for start in range(len(parts))
+        for other_start in range(len(other_parts))
+    )
+
+
+def are_scopes_of_one_path(scope: list[str], other: list[str]) -> bool:
+    """Return whether some path offers both scopes, given as segments, as itself or a wildcard path."""
+    if not scope or not other:
+        return scope == other
+    # A wildcard path stands for any path that extends what precedes its *.
+    wildcard, other_wildcard = scope[-1] == "*", other[-1] == "*"
+    if wildcard and other_wildcard:
+        return is_prefix_pair(scope[:-1], other[:-1])
+    if wildcard:
+        return len(scope) <= len(other) and other[: len(scope) - 1] == scope[:-1]
+    if other_wildcard:
+        return len(other) <= len(scope) and scope[: len(other) - 1] == other[:-1]
+    return scope == other
+
+
+def is_prefix_pair(segments: list[str], other: list[str]) -> bool:
+    """Return whether one list of segments starts the other, or equals it."""
+    length = min(len(segments), len(other))
+    return segments[:length] == other[:length]

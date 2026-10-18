@@ -139,6 +139,32 @@ A topic does not equal a plain `Asset` of its name, because their groups differ.
 with the topic, as in `triggering_asset_events[topic]`, works, because the accessor keys events by
 name and URI; the keys it yields when iterated over are plain assets.
 
+## Parse-time checks
+
+`policy.py` is a cluster policy, registered under the `airflow.policy` entry point. Airflow loads
+policy entry points as it initializes, when first imported, in every process (`settings.initialize`
+calls `load_policy_plugins` in 3.1 to 3.3), so the module imports only what Airflow has loaded by
+then. `dag_policy` returns at once while the process has not imported `topics.py`, since no Dag can
+then hold a topic, and while `[inbound_webhooks] dag_checks` is `off`. Otherwise it collects every
+problem of the Dag and raises one `AirflowClusterPolicyViolation`, as Airflow's documentation
+recommends.
+
+`DagBag.bag_dag` calls the policy for each Dag of a file once the file is imported: in the Dag
+processor, and when a worker parses the file to run a task. An `AirflowClusterPolicyViolation`
+becomes the file's import error, and only that Dag is left out of the file's Dags. A warning would
+not be seen: Airflow captures a file's warnings only while importing it, before policies run, and
+shows none in the UI. The Dag processor reports no warnings on 3.1, and only those of its Dag
+stability check from 3.2. So there is no warning mode.
+
+The checks find topics in each task's `outlets` and `inlets`, and in the timetable's
+`asset_condition`. The timetables the Task SDK builds from `schedule`, and from 3.2 those
+`airflow.sdk` exports, keep the Dag file's `WebhookTopic` objects. From 3.2 a timetable imported from
+`airflow.timetables` instead turns them into serialized assets, so a Dag that uses one is not
+checked. Two topics in one `|` condition, or in `|` conditions directly inside it, are refused when
+`naming.can_be_offered_together` says one delivery can offer both names through one kind; its
+docstring states the rule and its two limits. Topics on either side of an `&` are not compared: one
+delivery that matches both satisfies the `&` once.
+
 ## Airflow internals the plugin uses
 
 | Dependency | Why | Risk |
@@ -155,9 +181,11 @@ name and URI; the keys it yields when iterated over are plain assets.
 | `airflow.cli.cli_config` (`ActionCommand`, `GroupCommand`, `Arg`, `lazy_load_command`, `ARG_OUTPUT`, `ARG_YES`) and `airflow.cli.simple_table.AirflowConsole` | Define `airflow webhooks` for the provider's `cli`, and build the parser of `python -m airflow_inbound_webhooks.cli` from the same commands | Internal, but what Airflow's own providers use for their commands; the same in every supported version |
 | `airflow.configuration.conf` | Reads the `[inbound_webhooks]` options | How every Airflow component reads its configuration, with the same `get` and `getint` in every supported version. `airflow.sdk.conf` is the Task SDK's parser and only exists from 3.2. |
 | `Asset.asset_type` | Gives `WebhookTopic` its default group, `webhook` | A class attribute Airflow's own `Dataset` and `Model` set, not documented as a way to set the group. `Asset`'s `group` defaults to it in every supported version, and `access_control`, which `WebhookTopic` passes on when given, only exists from 3.3 |
+| A timetable's `asset_condition`, and the `objects` of `AssetAny` and `AssetAll` | Find the topics a Dag schedules on, for the checks | Attributes of public classes, not documented. The same in every supported version; from 3.2, timetables imported from `airflow.timetables` hold serialized assets instead of the Dag file's objects |
 | Plugin apps are mounted without authentication | The endpoint must accept services that cannot log in | If Airflow ever required login for plugin apps, every delivery would be rejected |
 
 Public interfaces used: `AirflowPlugin` with `fastapi_apps` and the `airflow.plugins` entry point,
+cluster policies through the `airflow.policy` entry point with `airflow.policies.hookimpl`,
 `airflow.sdk.Connection`, `airflow.sdk.Asset`, which `WebhookTopic` subclasses, `airflow.exceptions`
 and, in the examples, `airflow.sdk`.
 
