@@ -618,10 +618,12 @@ on_any_deployment()
 `WebhookTopic` takes the parts of an [event name](#event-names) as keywords, `webhook`, `path`,
 `event`, `action` and `detail`, and builds the name as the plugin names deliveries: `deployed` above
 is `demo/*/deployed`. Only `webhook` and `event` are required. A `path` can hold several segments,
-with `*` in place of trailing ones, as in `my-org/*`, but nowhere else. An event without an action,
-such as GitHub's `push`, takes its detail right after it: `event="push", detail="main"`. Values are
-folded to ASCII as delivery names are, so `detail="🚀 Café"` subscribes to the label `🚀 Café`.
-`WebhookTopic` also takes the whole name, as a response's `candidates` list it:
+with `*` in place of trailing ones, as in `my-org/*`, but nowhere else: `event`, `action` and
+`detail` take no `*`. To match any action or detail, leave it out, as `event="pull_request"` matches
+every pull request event. An event without an action, such as GitHub's `push`, takes its detail
+right after it: `event="push", detail="main"`. Values are folded to ASCII as delivery names are, so
+`detail="🚀 Café"` subscribes to the label `🚀 Café`. `WebhookTopic` also takes the whole name, as a
+response's `candidates` list it:
 `WebhookTopic("github/my-org/web/pull_request/labeled/deploy-preview")`, which can also spell out a
 path that holds a literal `*`. A name that no delivery offers, such as one that is not folded to
 ASCII, is refused.

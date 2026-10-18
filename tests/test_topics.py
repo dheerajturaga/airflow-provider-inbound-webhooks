@@ -201,6 +201,21 @@ def test_refused_name_suggests_none_where_unsure(name):
             "is not its whole last segment",
             id="two-wildcards",
         ),
+        pytest.param(
+            {"webhook": "github", "path": "my-org/*", "event": "pull_request", "action": "*", "detail": "x"},
+            "action '\\*' has a \\*, which the plugin offers only in place of trailing path segments",
+            id="wildcard-action",
+        ),
+        pytest.param(
+            {"webhook": "github", "path": "*", "event": "*"},
+            "event '\\*' has a \\*",
+            id="wildcard-event",
+        ),
+        pytest.param(
+            {"webhook": "github", "event": "push", "detail": "release-*"},
+            "detail 'release-\\*' has a \\*",
+            id="wildcard-in-a-detail",
+        ),
     ],
 )
 def test_segments_no_delivery_has_are_refused(segments, message):

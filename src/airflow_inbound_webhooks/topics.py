@@ -37,8 +37,8 @@ class WebhookTopic(Asset):
     ``path``, ``action`` and ``detail`` are optional; an event without an action, such as GitHub's
     ``push``, takes its detail right after it (``event="push", detail="main"``). A path can hold
     several segments, with ``*`` in place of trailing ones, as in ``my-org/*`` or ``*``, and nowhere
-    else. Or give the whole name, as a delivery's ``candidates`` list it, which also spells out a path
-    that holds a literal ``*``:
+    else: to match any action or detail, leave it out. Or give the whole name, as a delivery's
+    ``candidates`` list it, which also spells out a path that holds a literal ``*``:
     ``WebhookTopic("github/my-org/web/pull_request/labeled/deploy-preview")``. A name no delivery can
     offer is refused.
 
@@ -137,6 +137,15 @@ def build_topic_name(
     for keyword in ("event", "action", "detail"):
         if (value := segments[keyword]) is None:
             continue
+        # The endpoint offers * only in place of trailing path segments, never in an event, action or
+        # detail, so a * there would only match a sender's value that holds one.
+        if "*" in value:
+            raise ValueError(
+                f"WebhookTopic {keyword} {value!r} has a *, which the plugin offers only in place of "
+                "trailing path segments: to match any action or detail, leave it out, as "
+                "event='pull_request' matches every pull request event. Give the whole name for a value "
+                "that holds a literal *"
+            )
         # The endpoint ends a name at a segment that normalizes to nothing, so none goes past it.
         if not (normalized := naming.normalize_segment(value)):
             raise ValueError(
