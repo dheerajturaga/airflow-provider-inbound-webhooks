@@ -18,8 +18,8 @@ api_pipeline_success = Asset("gitlab/platform/api/pipeline/success")
 
 
 def get_payloads(triggering_asset_events, asset) -> list[dict]:
-    # Before Airflow 3.4, or with batch_asset_events, one run can carry several deliveries; events
-    # are not ordered, so sort them oldest first.
+    # Before Airflow 3.4, or with batch_asset_events, one run can carry several deliveries, and a run
+    # started by hand carries none. Events are not ordered, so sort them oldest first.
     events = sorted(triggering_asset_events[asset], key=lambda event: event.timestamp)
     # A payload over [inbound_webhooks] max_event_payload_bytes is left out of its event, which says so
     # in payload_truncated. These Dags skip it; one that needs it fetches the object from the service.
@@ -40,8 +40,10 @@ def web_deploy_preview():
 def web_deploy_staging():
     @task
     def deploy(*, triggering_asset_events=None):
-        if payloads := get_payloads(triggering_asset_events, web_main_push):
-            print(f"Deploying {payloads[-1]['after']} to staging")
+        if not (pushes := get_payloads(triggering_asset_events, web_main_push)):
+            print("No push to main with its payload reached this run, so there is nothing to deploy")
+            return
+        print(f"Deploying {pushes[-1]['after']} to staging")
 
     deploy()
 
@@ -62,8 +64,10 @@ def publish_release_notes():
 def api_deploy():
     @task
     def deploy(*, triggering_asset_events=None):
-        if payloads := get_payloads(triggering_asset_events, api_pipeline_success):
-            print(f"Deploying {payloads[-1]['object_attributes']['sha']}")
+        if not (pipelines := get_payloads(triggering_asset_events, api_pipeline_success)):
+            print("No successful pipeline with its payload reached this run, so there is nothing to deploy")
+            return
+        print(f"Deploying {pipelines[-1]['object_attributes']['sha']}")
 
     deploy()
 
