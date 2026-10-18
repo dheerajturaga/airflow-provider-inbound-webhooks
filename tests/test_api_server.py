@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -272,8 +273,11 @@ def test_readme_quick_start(api_server_url, session, subscribe, webhook_connecti
     result = send_test_event(f"{api_server_url}/webhooks/demo", {"event": "deployed", "service": "billing"})
 
     assert result.returncode == 0, result.stdout + result.stderr
-    # The output the README shows, indented as in its list of steps.
-    assert textwrap.indent(result.stdout, "   ") in (Path(__file__).parents[1] / "README.md").read_text()
+    # The step prints what the README shows it printing.
+    readme = (Path(__file__).parents[1] / "README.md").read_text()
+    shown = re.search(r"It prints the response.*?```text\n(.*?\n) *```\n", readme, re.DOTALL)
+    assert shown is not None
+    assert textwrap.dedent(shown.group(1)) == result.stdout
     assert list(session.scalars(select(AssetDagRunQueue.target_dag_id))) == ["smoke_test_billing"]
 
 

@@ -39,7 +39,15 @@ ARG_LIMIT = Arg(
     default=20,
     help=f"How many of the latest deliveries to show, 1 to {MAX_LIMIT} (default 20)",
 )
-ARG_DELIVERY = Arg(("--id",), dest="delivery", help="Show this delivery as JSON, with its payload")
+ARG_DELIVERY = Arg(
+    ("--id",),
+    dest="delivery",
+    help="Show the delivery whose record has this ID, which the list shows, as JSON with its payload",
+)
+ARG_DELIVERY_ID = Arg(
+    ("--delivery-id",),
+    help="Show only the deliveries the sender gave this delivery ID, the one in its answer",
+)
 ARG_OLDER_THAN = Arg(
     ("--older-than",),
     type=int,
@@ -71,9 +79,9 @@ WEBHOOKS_COMMANDS = (
     ),
     ActionCommand(
         name="deliveries",
-        help="Show a webhook's latest deliveries, or one delivery with its payload",
+        help="Show a webhook's latest deliveries, those with a delivery ID, or one with its payload",
         func=lazy_load_command("airflow_inbound_webhooks.cli.deliveries"),
-        args=(ARG_NAME, ARG_LIMIT, ARG_DELIVERY, ARG_OUTPUT),
+        args=(ARG_NAME, ARG_LIMIT, ARG_DELIVERY, ARG_DELIVERY_ID, ARG_OUTPUT),
     ),
     ActionCommand(
         name="clean",
@@ -178,7 +186,7 @@ def check(args: argparse.Namespace) -> None:
 
 
 def deliveries(args: argparse.Namespace) -> None:
-    """Print a webhook's latest deliveries, or one delivery, with its payload, as JSON."""
+    """Print a webhook's latest deliveries, or those with a delivery ID, or one with its payload as JSON."""
     from airflow.cli.simple_table import AirflowConsole
     from fastapi.encoders import jsonable_encoder
 
@@ -186,11 +194,15 @@ def deliveries(args: argparse.Namespace) -> None:
 
     # The command line reads the database itself, so it shows every team's deliveries.
     if args.delivery is not None:
+        if args.delivery_id is not None:
+            sys.exit("Pass --id, the record's ID, or --delivery-id, the sender's, not both")
         if (row := find_row(args.name, None, args.delivery, every_team=True)) is None:
             sys.exit(f"Webhook {args.name} has no delivery {args.delivery}")
         print(json.dumps(jsonable_encoder(row), indent=2, sort_keys=True))
         return
-    rows = jsonable_encoder(list_rows(args.name, None, args.limit, every_team=True))
+    rows = jsonable_encoder(
+        list_rows(args.name, None, args.limit, delivery_id=args.delivery_id, every_team=True)
+    )
     AirflowConsole().print_as(
         data=rows, output=args.output, mapper=summarize if args.output == "table" else None
     )

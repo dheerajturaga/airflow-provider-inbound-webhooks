@@ -34,7 +34,9 @@ body:
     id: what-happened
     attributes:
       label: What happened, and what did you expect?
-      description: Include the HTTP status and response body of the delivery if you have them.
+      description: >
+        Include the delivery's HTTP status and, if you can read its record under Browse → Webhook
+        deliveries, its outcome, the names it offered and its asset events, without the payload.
     validations:
       required: true
   - type: textarea

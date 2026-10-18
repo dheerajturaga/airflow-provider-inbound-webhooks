@@ -117,6 +117,11 @@ at the same time are neither skipped nor shown twice, and the database can read 
 `(webhook, received_at)` index backwards. The page lists only the webhooks in `webhook_names`, since
 listing those with stored deliveries would mean a `DISTINCT` over the whole table on every view.
 
+The page, the list route and `airflow webhooks deliveries` also find deliveries by the sender's
+delivery ID, the only ID a delivery's answer carries. The unique key on
+`(webhook, delivery_id, body_digest)` indexes that search, which can find several deliveries: a
+retry is recognised by its body as well as its ID.
+
 ## Webhook topics
 
 `WebhookTopic`, in `topics.py`, is an `Asset` whose class sets `asset_type` to `webhook`. `Asset`'s

@@ -159,7 +159,8 @@ machine running the Airflow API server (Airflow 3.1.1 or later).
    ```
 
    The delivery's page under **Browse → Webhook deliveries** shows the names it offered and the
-   asset event it recorded. Anything else? See
+   asset event it recorded. Reading it needs permission to read the connection `webhook_demo`, which
+   the Admin and Op roles of Airflow's simple auth manager have. Anything else? See
    [Responses and troubleshooting](#responses-and-troubleshooting).
 
 A webhook's connection is read again within a minute of a change, so changing its secret or options
@@ -239,8 +240,9 @@ Before you start:
 6. Add a Dag that schedules on an event, such as
    `Asset("github/my-org/web/pull_request/labeled/deploy-preview")`, and unpause it. To find a name,
    trigger the event once and copy one of the names it offered from its delivery under
-   **Browse → Webhook deliveries**, or see [Event names](#event-names). The Dag's page shows the
-   name it schedules on:
+   **Browse → Webhook deliveries**, which you can search by the `delivery_id` of its response. That
+   needs permission to read the connection `webhook_github`; anyone can build a name as
+   [Event names](#event-names) describes. The Dag's page shows the name it schedules on:
 
    <img alt="The deploy_preview Dag in Airflow, scheduled on github/dheerajturaga/inbound-webhooks-demo/pull_request/labeled/deploy-preview" src="docs/images/screenshots/airflow-dag-schedule.png" width="720">
 
@@ -279,7 +281,9 @@ Before you start:
 
 6. Add a Dag that schedules on an event, such as `Asset("gitlab/platform/api/pipeline/success")`, and
    unpause it. To find a name, trigger the event once and copy one of the names it offered from its
-   delivery under **Browse → Webhook deliveries**, or see [Event names](#event-names).
+   delivery under **Browse → Webhook deliveries**, which you can search by the `delivery_id` of its
+   response. That needs permission to read the connection `webhook_gitlab`; anyone can build a name
+   as [Event names](#event-names) describes.
 
 ### Connect Jira
 
@@ -318,11 +322,13 @@ Before you start:
    the names Jira events get.
 
 6. Check it by making that change in Jira, here moving an `OPS` issue to *Ready for Deploy*: the Dag
-   starts a run. Jira does not show webhook responses, so if nothing happens, check the API server
-   log: it reports a delivery whose secret does not match, or a misconfigured connection. Otherwise
-   check that `jira` is in `webhook_names`, that *Exclude body* is unchecked and that the Dag is
-   unpaused. With `[logging] logging_level = DEBUG` on the API server, the log also lists the names a
-   delivery offered when no Dag schedules on any of them.
+   starts a run. Jira does not show webhook responses, so if nothing happens, look for the delivery
+   under **Browse → Webhook deliveries**. If it is there, its outcome and the names it offered say
+   why no Dag ran; see [Responses and troubleshooting](#responses-and-troubleshooting). If it is
+   not, Airflow refused it or Jira did not send it: the API server log reports a delivery whose
+   secret does not match, or a misconfigured connection. Otherwise check that `jira` is in
+   `webhook_names`, that *Exclude body* is unchecked, and that the webhook's JQL filter and events
+   cover the change.
 
 ### Connect any other service
 
@@ -367,7 +373,8 @@ describe its deliveries in the connection.
 
 4. Add a Dag that schedules on an event, such as `Asset("deploybot/billing/deployed")`, and unpause
    it. To find a name, send the event once and copy one of the names it offered from its delivery
-   under **Browse → Webhook deliveries**, or see [Event names](#event-names).
+   under **Browse → Webhook deliveries**. That needs permission to read the connection
+   `webhook_deploybot`; anyone can build a name as [Event names](#event-names) describes.
 
 A service whose signature covers more than the body, such as a timestamp, or that needs a handshake
 when the webhook is registered, needs a built-in source type: see [Other services](#other-services).
@@ -445,10 +452,17 @@ Deeper paths work the same way. For a GitLab project `platform/backend/api`,
 `gitlab/platform/backend/*/...` covers the `backend` subgroup, `gitlab/platform/*/...` the whole
 `platform` group, subgroups included, and `gitlab/*/...` every project.
 
-**Finding a name:** send the event once and copy one of the names it offered from its delivery
-under **Browse → Webhook deliveries**. `airflow webhooks deliveries <name> --id <id>` and
-`GET /webhooks/_deliveries/<name>/<id>` show them as `candidates`; see
-[Reading deliveries](#reading-deliveries). The response to the sender does not list them, because
+**Finding a name:** send the event once, then copy one of the names it offered from its delivery
+under **Browse → Webhook deliveries**. A webhook's page there finds the delivery by the
+`delivery_id` of its response, the ID the sender gives each delivery, such as the one GitHub shows
+under **Recent Deliveries**; a delivery without one is found by when it arrived.
+`airflow webhooks deliveries <webhook> --delivery-id <ID> --output json` and
+`GET /webhooks/_deliveries/<webhook>?delivery_id=<ID>` find it too, with the names as `candidates`;
+see [Reading deliveries](#reading-deliveries).
+
+Reading deliveries needs permission to read the webhook's connection, which Airflow's simple auth
+manager gives the Op and Admin roles but not Viewer or User. Anyone can also build a name by the
+rule above, which needs no permission. The response to the sender does not list the names, because
 services show responses to people who need not be Airflow users. A delivery that matches no
 subscribed name is answered with `202` and `outcome` `no_subscribers`, and records no asset event;
 its [delivery record](#delivery-records) keeps its names, without the payload.
@@ -790,19 +804,21 @@ schedule, as you would `airflow db clean`.
 Under **Browse → Webhook deliveries**, the Airflow UI lists the webhooks in `webhook_names` whose
 deliveries you may read, and has a field for any other webhook's name. A webhook's page lists its
 latest deliveries: when each arrived, its outcome, delivery ID and path, and the asset events it
-recorded. Each delivery's page shows the names it offered and its stored payload, which makes it the
-place to find the name to subscribe to.
+recorded. Its search field finds the deliveries with a delivery ID, the `delivery_id` of their
+responses. Each delivery's page shows the names it offered and its stored payload, which makes it
+the place to find the name to subscribe to.
 
 The same records are served as JSON, to a bearer token from Airflow's `/auth/token` or the UI's
 session:
 
 | Route | Returns |
 |---|---|
-| `GET /webhooks/_deliveries/<name>?limit=50&before=<time>&before_id=<id>` | A webhook's deliveries, newest first, without payloads. `limit` is 1 to 500. To page back, pass the last delivery's `received_at` and `id` as `before` and `before_id` |
-| `GET /webhooks/_deliveries/<name>/<id>` | One delivery, with its payload |
+| `GET /webhooks/_deliveries/<webhook>?limit=50&before=<time>&before_id=<id>&delivery_id=<ID>` | A webhook's deliveries, newest first, without payloads. `delivery_id` keeps those the sender gave that delivery ID, the `delivery_id` of their responses; several can share one, each with another body. `limit` is 1 to 500. To page back, pass the last delivery's `received_at` and `id` as `before` and `before_id` |
+| `GET /webhooks/_deliveries/<webhook>/<id>` | One delivery, with its payload, by the `id` of its record, which the list shows: not the sender's delivery ID |
 
 Reading a webhook's deliveries needs permission to read its connection, `webhook_<name>`, checked
-for the team its extra's `team_name` names, and shows only the deliveries attributed to that team. A
+for the team its extra's `team_name` names, and shows only the deliveries attributed to that team.
+With Airflow's simple auth manager, the Op and Admin roles have it, and Viewer and User do not. A
 webhook whose connection cannot be read shows nothing: Airflow reports a secrets backend it could
 not read as a missing connection, so there would be no team to check. The page and these routes are
 not a public interface yet, and can change in any release.
@@ -816,8 +832,8 @@ not a public interface yet, and can change in any release.
 
 | Command | Does |
 |---|---|
-| `airflow webhooks check <name>` | Reports how deliveries to a webhook would be served: whether `webhook_names` lists it, whether its connection is valid, whether each `[inbound_webhooks]` option that takes a number is an integer, and whether the delivery table is ready. Exits with `1` if deliveries would fail |
-| `airflow webhooks deliveries <name>` | Shows the latest deliveries of every team (`--limit`, 1 to 500, and `--output`), or with `--id` one delivery as JSON, with its payload |
+| `airflow webhooks check <webhook>` | Reports how deliveries to a webhook would be served: whether `webhook_names` lists it, whether its connection is valid, whether each `[inbound_webhooks]` option that takes a number is an integer, and whether the delivery table is ready. Exits with `1` if deliveries would fail |
+| `airflow webhooks deliveries <webhook>` | Shows the latest deliveries of every team (`--limit`, 1 to 500, and `--output`), with `--delivery-id` only those the sender gave that delivery ID, the `delivery_id` of their responses, or with `--id` one delivery as JSON, with its payload, by the `id` of its record, which the list shows |
 | `airflow webhooks clean` | Deletes delivery records older than `delivery_retention` days, or `--older-than` days, after asking. `--yes` skips the question, which a schedule needs; `--dry-run` only counts |
 | `airflow webhooks send-test` | Sends a signed test delivery, as `python -m airflow_inbound_webhooks.send_test_event` does |
 
@@ -861,16 +877,16 @@ would fail. A `200` or `202` answer has two fields:
 
 Nothing else is in the answer: services show answers to people who need not be Airflow users, as
 GitHub's **Recent Deliveries** and GitLab's **Recent events** do, and the asset events a delivery
-recorded would tell them which Dags exist. The delivery's page under
-**Browse → Webhook deliveries** shows the names it offered and the asset events it recorded; see
-[Reading deliveries](#reading-deliveries).
+recorded would tell them which Dags exist. Under **Browse → Webhook deliveries**, the webhook's page
+finds the delivery by its `delivery_id`, and the delivery's page shows the names it offered and the
+asset events it recorded; see [Reading deliveries](#reading-deliveries).
 
 | Status | Meaning | What to check |
 |---|---|---|
-| `200` `duplicate` | A retry: the delivery was recorded before, and nothing is recorded again | Nothing; the sender sent the delivery again |
+| `200` `duplicate` | A retry of a delivery that recorded asset events: nothing is recorded again, not even for a Dag that has subscribed to one of its names since | Nothing, if the sender sent the delivery again. To try a Dag that subscribed since, trigger a new event rather than redelivering this one |
 | `202` `accepted` | Recorded: an asset event on each subscribed name, which the delivery's page lists | If no Dag run starts, check that the scheduler is running |
 | `202` `no_subscribers` | Verified, but no Dag schedules on any of the names it offered, so no asset event is recorded | The Dag schedules on one of the names the delivery's page lists, and has been parsed: `airflow dags reserialize` parses it now. The API server also logs the names at debug level |
-| `202` `dag_paused` | Verified, but every Dag that schedules on one of its names is paused (or, on Airflow 3.4 and later, draining), so no asset event is recorded | Unpause the Dag |
+| `202` `dag_paused` | Verified, but every Dag that schedules on one of its names is paused (or, on Airflow 3.4 and later, draining), so no asset event is recorded | Unpause the Dag, then redeliver the delivery: unpausing queues nothing, and a delivery that recorded nothing is processed again |
 | `400` | The body is not a JSON object, holds `NaN` or `Infinity`, which JSON does not allow, or a number too large to store, such as `1e400`, or nests objects and arrays more than 64 levels deep; or the event name is missing, or the delivery ID is longer than 255 characters | GitHub: the content type is `application/json`. Jira: *Exclude body* is unchecked |
 | `401` | Signature or token does not match | The secret in the service equals the connection's password |
 | `404` | No such webhook: the name is not in `webhook_names`, or has no `webhook_<name>` connection | The name is in `webhook_names` and the API server was restarted after it changed; the connection ID is `webhook_` plus the name in the URL. Airflow's connection lookup also reports a database or secrets backend it could not read as a missing connection, which is then reused for `connection_cache_ttl` |

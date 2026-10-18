@@ -137,6 +137,26 @@ def test_unknown_delivery_fails(add_delivery):
         cli.main(["deliveries", "github", "--id", "no-such-delivery"])
 
 
+def test_deliveries_are_found_by_the_delivery_id_the_sender_gave_them(add_delivery, capsys):
+    # Of every team, as the command line shows them all; a retry is recognised by its body too.
+    found = {
+        add_delivery(delivery_id="d-1"),
+        add_delivery(delivery_id="d-1", body_digest="1" * 64, team_name="team_b"),
+    }
+    add_delivery(delivery_id="d-2")
+
+    cli.main(["deliveries", "github", "--delivery-id", "d-1", "--output", "json"])
+
+    assert {delivery["id"] for delivery in json.loads(capsys.readouterr().out)} == found
+
+
+def test_record_id_and_delivery_id_are_not_taken_together(add_delivery):
+    delivery = add_delivery(delivery_id="d-1")
+
+    with pytest.raises(SystemExit, match="not both"):
+        cli.main(["deliveries", "github", "--id", delivery, "--delivery-id", "d-1"])
+
+
 @pytest.fixture
 def old_and_new_deliveries(add_delivery):
     now = datetime.now(tz=timezone.utc)
