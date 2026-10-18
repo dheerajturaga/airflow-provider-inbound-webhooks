@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 import uuid
 from datetime import datetime, timezone
 from importlib.metadata import version
@@ -62,6 +63,11 @@ from airflow.utils.session import create_session  # noqa: E402
 from sqlalchemy import delete, select  # noqa: E402
 
 from airflow_inbound_webhooks.models import delivery_table  # noqa: E402
+
+try:
+    from airflow.dag_processing.dagbag import DagBag, sync_bag_to_db
+except ImportError:  # Airflow 3.1
+    from airflow.models.dagbag import DagBag, sync_bag_to_db
 
 # Children first, so deletes satisfy foreign keys.
 CLEARED_MODELS = (
@@ -133,6 +139,31 @@ def subscribe(session):
         session.commit()
 
     return subscribe_dag
+
+
+@pytest.fixture
+def parse_dag_file(tmp_path):
+    """Parse a Dag file as the Dag processor does, into a DagBag with its Dags and import errors."""
+
+    def parse(source: str) -> DagBag:
+        path = tmp_path / "dags.py"
+        path.write_text(textwrap.dedent(source))
+        return DagBag(dag_folder=str(path))
+
+    return parse
+
+
+@pytest.fixture
+def store_dags(session):
+    """Store a DagBag's Dags, their assets and what they schedule on, as the Dag processor does."""
+
+    def store(bag: DagBag) -> None:
+        if session.get(DagBundleModel, "testing") is None:
+            session.add(DagBundleModel(name="testing"))
+        session.commit()
+        sync_bag_to_db(bag, "testing", None)
+
+    return store
 
 
 @pytest.fixture

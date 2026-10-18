@@ -56,6 +56,7 @@ The tests are organised as:
 | `tests/test_sources.py` | Verification and parsing of each source type |
 | `tests/test_naming.py` | The event naming rule |
 | `tests/test_name_stability.py` | That deliveries posted to the endpoint keep the names `tests/candidate_names.json` records for them, and that the names the README and the example Dags use are offered |
+| `tests/test_topics.py` | `WebhookTopic`: the names it builds or takes, what it refuses, that a Dag scheduled on it keeps its name and group when serialized, and that importing the package imports nothing from Airflow |
 | `tests/test_app.py` | The endpoint, in process: routing, responses, connection handling |
 | `tests/test_api_server.py` | The real `airflow api-server` with the installed plugin, over HTTP, including the README quick start |
 | `tests/test_plugin.py` | That importing the plugin, which every Airflow process does, leaves the endpoint's Airflow internals unimported |

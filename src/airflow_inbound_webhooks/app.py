@@ -12,7 +12,6 @@ import inspect
 import json
 import logging
 import math
-import re
 import threading
 import time
 import uuid
@@ -33,7 +32,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from airflow_inbound_webhooks import configuration
 from airflow_inbound_webhooks.connection_form import CONN_TYPE
-from airflow_inbound_webhooks.naming import build_candidate_names
+from airflow_inbound_webhooks.naming import WEBHOOK_NAME_PATTERN, build_candidate_names
 from airflow_inbound_webhooks.sources import (
     SOURCE_TYPES,
     STORED_PAYLOADS,
@@ -54,7 +53,6 @@ log = logging.getLogger(__name__)
 
 CONN_ID_PREFIX = "webhook_"
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024
-WEBHOOK_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 # The lengths of the delivery table's delivery_id, path and team_name columns.
 MAX_DELIVERY_ID_LENGTH = 255
 MAX_PATH_LENGTH = 1500

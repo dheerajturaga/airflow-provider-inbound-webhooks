@@ -47,6 +47,12 @@ breaking change, listed under "Changed event names" with the old and new names.
   `extra` then has `payload` `null` and `payload_truncated` `true`; the delivery record keeps it
   until `airflow webhooks clean` deletes the record. Every event's `extra` has `payload_truncated`,
   which is `false` unless the payload was left out.
+- `WebhookTopic`, imported from `airflow_inbound_webhooks`, the documented way for a Dag to
+  subscribe: an asset in the group `webhook`, named from its segments as the plugin names
+  deliveries, as in `WebhookTopic(webhook="github", path="my-org/web", event="pull_request")`, or
+  from the whole name, which it refuses if no delivery can offer it. It refuses `extra` and
+  `watchers`. `Asset(name)` keeps working. Dag files that use it need the package wherever they are
+  parsed, not only on the API server.
 
 ### Changed
 

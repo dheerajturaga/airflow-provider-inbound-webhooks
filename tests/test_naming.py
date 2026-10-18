@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from airflow_inbound_webhooks.naming import build_candidate_names
+from airflow_inbound_webhooks.naming import build_candidate_names, can_be_offered
 from airflow_inbound_webhooks.sources import WebhookEvent
 
 
@@ -142,4 +142,40 @@ def build_event(path, *kinds) -> WebhookEvent:
     ],
 )
 def test_build_candidate_names(event, expected):
-    assert build_candidate_names("github", event) == expected
+    names = build_candidate_names("github", event)
+
+    assert names == expected
+    assert all(can_be_offered(name) for name in names)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "github/my-org/web/pull_request/labeled/deploy-preview",
+        "github/*/push",
+        "huggingface/update",
+        # Spaces next to a slash inside a segment, as in a Jira status, are kept.
+        "jira/OPS/issue_updated/status/In Review / QA",
+        # An hmac_json service may name an event "*", which is only a literal.
+        "deploybot/*",
+    ],
+)
+def test_name_a_delivery_can_offer(name):
+    assert can_be_offered(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("github", id="no-kind"),
+        pytest.param("GitHub/push", id="webhook-name-not-served"),
+        pytest.param("-github/push", id="webhook-name-starting-with-a-dash"),
+        pytest.param("github/push/", id="trailing-slash"),
+        pytest.param("github//push", id="empty-part"),
+        pytest.param("github/ push", id="space-starting-a-segment"),
+        pytest.param("github/push ", id="space-ending-a-segment"),
+        pytest.param("github/labeled/Café", id="not-folded-to-ascii"),
+    ],
+)
+def test_name_no_delivery_can_offer(name):
+    assert not can_be_offered(name)

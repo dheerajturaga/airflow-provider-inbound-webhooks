@@ -111,6 +111,34 @@ at the same time are neither skipped nor shown twice, and the database can read 
 `(webhook, received_at)` index backwards. The page lists only the webhooks in `webhook_names`, since
 listing those with stored deliveries would mean a `DISTINCT` over the whole table on every view.
 
+## Webhook topics
+
+`WebhookTopic`, in `topics.py`, is an `Asset` whose class sets `asset_type` to `webhook`. `Asset`'s
+`group` defaults to its class's `asset_type`, as for Airflow's own `Dataset` and `Model`, so topics
+get the group `webhook`. Serialization keeps the group but not the class: the Dag processor stores a
+topic as a plain asset, and the scheduler and the endpoint, which match by name, never see the
+subclass.
+
+A topic must have a name that some delivery can offer, or its Dag would never run. From segments,
+the name is built with the endpoint's own normalization: `naming.normalize_path`,
+`normalize_segment` and `build_name`, which `build_candidate_names` uses too. A whole name is
+checked with `naming.can_be_offered` and refused rather than normalized, because a name that
+normalization would change is a mistake, and changing it silently could subscribe the Dag to other
+events. The URI is the name. `attrs.evolve` calls `__init__` with every field, so an empty `extra`
+and `watchers` and the name as `uri` must pass; `copy.copy` and `copy.deepcopy` restore the fields
+without calling it.
+
+Dag files import `WebhookTopic` from the package. A module `__getattr__` imports `topics.py` only
+when a Dag file asks for it, because `topics.py` imports the Task SDK, and so Airflow, which
+initializes as it is imported. Importing the package alone, as
+`python -m airflow_inbound_webhooks.send_test_event` does, imports nothing from Airflow. Airflow's
+own processes gain nothing by it: `import airflow` imports the Task SDK too, through
+`conf.mask_secrets()`, in every supported version.
+
+A topic does not equal a plain `Asset` of its name, because their groups differ. Looking events up
+with the topic, as in `triggering_asset_events[topic]`, works, because the accessor keys events by
+name and URI; the keys it yields when iterated over are plain assets.
+
 ## Airflow internals the plugin uses
 
 | Dependency | Why | Risk |
@@ -126,10 +154,12 @@ listing those with stored deliveries would mean a `DISTINCT` over the whole tabl
 | `airflow.api_fastapi.core_api.security.get_user`, `airflow.api_fastapi.app.get_auth_manager` and `ConnectionDetails` | Check the login and permissions of the deliveries page and API | Internal. `get_user`'s second parameter has a different name in 3.1 and 3.2 than in 3.3, so it is called positionally. The real API server tests check a bearer token and the UI's session cookie on every supported version |
 | `airflow.cli.cli_config` (`ActionCommand`, `GroupCommand`, `Arg`, `lazy_load_command`, `ARG_OUTPUT`, `ARG_YES`) and `airflow.cli.simple_table.AirflowConsole` | Define `airflow webhooks` for the provider's `cli`, and build the parser of `python -m airflow_inbound_webhooks.cli` from the same commands | Internal, but what Airflow's own providers use for their commands; the same in every supported version |
 | `airflow.configuration.conf` | Reads the `[inbound_webhooks]` options | How every Airflow component reads its configuration, with the same `get` and `getint` in every supported version. `airflow.sdk.conf` is the Task SDK's parser and only exists from 3.2. |
+| `Asset.asset_type` | Gives `WebhookTopic` its default group, `webhook` | A class attribute Airflow's own `Dataset` and `Model` set, not documented as a way to set the group. `Asset`'s `group` defaults to it in every supported version, and `access_control`, which `WebhookTopic` passes on when given, only exists from 3.3 |
 | Plugin apps are mounted without authentication | The endpoint must accept services that cannot log in | If Airflow ever required login for plugin apps, every delivery would be rejected |
 
 Public interfaces used: `AirflowPlugin` with `fastapi_apps` and the `airflow.plugins` entry point,
-`airflow.sdk.Connection`, `airflow.exceptions` and, in the examples, `airflow.sdk`.
+`airflow.sdk.Connection`, `airflow.sdk.Asset`, which `WebhookTopic` subclasses, `airflow.exceptions`
+and, in the examples, `airflow.sdk`.
 
 `airflow.sdk.Connection` reads metadata-database connections only in a server context. The API
 server declares itself one from Airflow 3.1.1, which sets the minimum version: on 3.0.x and 3.1.0 the
@@ -187,7 +217,8 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
    or project still changes its names, which the plugin cannot prevent.
 7. **Source types from other packages.** `SOURCE_TYPES` is a fixed dictionary; other packages could
    contribute source types through an entry point. That would make `WebhookSource` and `WebhookEvent`
-   a public interface; until then the Python modules are internal (README, "Versioning").
+   a public interface; until then the Python modules other than `WebhookTopic` are internal
+   (README, "Versioning").
 8. **Verification handshakes.** Some services verify a URL when the webhook is registered and expect
    a custom response, which the `WebhookSource` interface cannot produce yet.
 

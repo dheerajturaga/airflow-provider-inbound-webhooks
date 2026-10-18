@@ -26,7 +26,8 @@ from fastapi.security.utils import get_authorization_scheme_param
 from sqlalchemy import and_, false, or_, select
 
 from airflow_inbound_webhooks import configuration
-from airflow_inbound_webhooks.app import CONN_ID_PREFIX, WEBHOOK_NAME_PATTERN, get_webhook_names
+from airflow_inbound_webhooks.app import CONN_ID_PREFIX, get_webhook_names
+from airflow_inbound_webhooks.naming import WEBHOOK_NAME_PATTERN
 
 if TYPE_CHECKING:
     from sqlalchemy import ColumnElement

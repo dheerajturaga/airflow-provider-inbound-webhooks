@@ -34,6 +34,9 @@ def build_event(timestamp: int, payload: dict | None) -> mock.Mock:
         pytest.param(
             "jira_issues.py", "get_issues", {"issue": {"key": "OPS-1"}}, {"key": "OPS-1"}, id="jira"
         ),
+        pytest.param(
+            "webhook_topics.py", "get_payloads", {"after": "abc123"}, {"after": "abc123"}, id="webhook_topics"
+        ),
     ],
 )
 def test_example_dags_skip_payloads_left_out_of_their_events(file_name, read_payloads, payload, expected):

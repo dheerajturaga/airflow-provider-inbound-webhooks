@@ -19,7 +19,7 @@ from airflow import settings
 from airflow.assets.manager import AssetManager
 from airflow.listeners import hookimpl
 from airflow.listeners.listener import get_listener_manager
-from airflow.models.asset import AssetDagRunQueue, AssetEvent
+from airflow.models.asset import AssetDagRunQueue, AssetEvent, AssetModel
 from airflow.models.connection import Connection as ConnectionModel
 from airflow.models.dag import DagModel
 from airflow.models.log import Log
@@ -1088,6 +1088,51 @@ def test_dag_scheduled_through_an_asset_ref_is_a_subscriber(client, session, sub
     assert post_github(client).json()["outcome"] == "accepted"
     # Airflow queues a Dag scheduled through Asset.ref(name=...) or Asset.ref(uri=...) too.
     assert get_queued_dag_ids(session) == {"ref_preview"}
+
+
+DEPLOY_PREVIEW_DAG = """
+from airflow.sdk import Asset, dag, task
+
+from airflow_inbound_webhooks import WebhookTopic
+
+
+@dag(schedule={schedule}, is_paused_upon_creation=False)
+def deploy_preview():
+    @task
+    def deploy(): ...
+
+    deploy()
+
+
+deploy_preview()
+"""
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+@pytest.mark.parametrize(
+    ("schedule", "group"),
+    [
+        pytest.param(
+            'WebhookTopic(webhook="github", path="my-org/web", event="pull_request", action="labeled", '
+            'detail="deploy-preview")',
+            "webhook",
+            id="webhook-topic",
+        ),
+        pytest.param('Asset("github/my-org/web/pull_request/labeled/deploy-preview")', "asset", id="asset"),
+    ],
+)
+def test_dag_scheduled_on_a_topic_is_queued_as_one_scheduled_on_its_asset(
+    client, session, parse_dag_file, store_dags, schedule, group
+):
+    name = "github/my-org/web/pull_request/labeled/deploy-preview"
+    store_dags(parse_dag_file(DEPLOY_PREVIEW_DAG.format(schedule=schedule)))
+
+    response = post_github(client)
+
+    assert response.json()["asset_events"].keys() == {name}
+    assert get_queued_dag_ids(session) == {"deploy_preview"}
+    # The group is the only difference, and nothing that matches deliveries reads it.
+    assert session.scalar(select(AssetModel.group).where(AssetModel.name == name)) == group
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)

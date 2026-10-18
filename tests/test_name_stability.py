@@ -36,6 +36,7 @@ from airflow.utils.session import create_session
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 
+from airflow_inbound_webhooks import WebhookTopic
 from airflow_inbound_webhooks.app import WEBHOOK_NAME_PATTERN, build_app
 from airflow_inbound_webhooks.models import delivery_table
 
@@ -311,7 +312,7 @@ DELIVERIES: dict[str, Delivery] = {
 README = ROOT / "README.md"
 EXAMPLE_DAGS = sorted((ROOT / "examples" / "dags").glob("*.py"))
 # What the README's Python may build assets with, by the name it calls each one.
-README_NAMESPACE: dict[str, Any] = {"Asset": Asset}
+README_NAMESPACE: dict[str, Any] = {"Asset": Asset, "WebhookTopic": WebhookTopic}
 # A line of a text block of names starts with a webhook's name and a slash.
 NAME_LINE = re.compile(r"[a-z0-9][a-z0-9_-]*/")
 
