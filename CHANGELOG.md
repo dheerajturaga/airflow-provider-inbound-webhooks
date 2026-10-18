@@ -17,6 +17,9 @@ breaking change, listed under "Changed event names" with the old and new names.
   delivery ID longer than 255 characters is refused with `400`, and an empty one counts as none.
 - `outcome` and `delivery_id` in every `202` answer. `outcome` is `events_recorded`,
   `no_subscribers`, `dag_paused`, or `duplicate` for a retry.
+- `from_webhook`, `webhook`, `source_type` and `correlation_key` in each asset event's `extra`, the
+  keys AIP-125 proposes for webhook events. `source` stays, holding the same as `webhook`, and
+  `correlation_key` is `null` until a source type sets one.
 - `[inbound_webhooks] rate_limit_per_minute`, off by default: verified deliveries over it are
   answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification
   do not count, and each API server worker counts on its own.
