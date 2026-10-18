@@ -12,6 +12,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -73,9 +74,39 @@ class WebhookSource(ABC):
         return payload
 
 
+# Levels of objects and arrays a JSON body may nest, its own object being the first. Webhook payloads
+# nest far less. What stores or reads an accepted payload gives up long before Python's json does:
+# MySQL refuses a JSON document nested more than 100 levels deep, counting the value innermost, and
+# asset events hold the payload a level down in their extra, so the limit stays well under that.
+# Pydantic, with which Airflow's APIs serve asset events, refuses data nested about 255 levels deep,
+# and FastAPI's encoder in the deliveries API runs out of recursion at about the same depth.
+MAX_JSON_DEPTH = 64
+NESTED_TOO_DEEPLY = f"JSON body is nested more than {MAX_JSON_DEPTH} levels deep"
+
+
 def refuse_constant(name: str) -> Any:
     # Python's json accepts NaN and Infinity, which JSON does not, and MySQL refuses to store them.
     raise ValueError(f"JSON body contains {name}, which JSON does not allow")
+
+
+def refuse_infinite_number(text: str) -> float:
+    # Python's json reads a number too large for a float, such as 1e400, as infinity, as if the body
+    # held Infinity.
+    if math.isinf(value := float(text)):
+        raise ValueError("JSON body contains a number too large to store")
+    return value
+
+
+def is_nested_too_deeply(payload: dict[str, Any]) -> bool:
+    # A stack rather than recursion, which would fail on the depths it is meant to refuse.
+    stack: list[tuple[Any, int]] = [(payload, 1)]
+    while stack:
+        value, depth = stack.pop()
+        if depth > MAX_JSON_DEPTH:
+            return True
+        children = value.values() if isinstance(value, dict) else value
+        stack.extend((child, depth + 1) for child in children if isinstance(child, (dict, list)))
+    return False
 
 
 def load_json_object(headers: Headers, body: bytes) -> dict[str, Any]:
@@ -86,13 +117,15 @@ def load_json_object(headers: Headers, body: bytes) -> dict[str, Any]:
             "configure the sender to deliver JSON"
         )
     try:
-        payload = json.loads(body, parse_constant=refuse_constant)
+        payload = json.loads(body, parse_constant=refuse_constant, parse_float=refuse_infinite_number)
     except RecursionError:
         # json raises RecursionError rather than ValueError for nesting deeper than the interpreter
         # allows, which would otherwise answer a signed delivery with a 500.
-        raise ValueError("JSON body is nested too deeply") from None
+        raise ValueError(NESTED_TOO_DEEPLY) from None
     if not isinstance(payload, dict):
         raise ValueError("Expected a JSON object")
+    if is_nested_too_deeply(payload):
+        raise ValueError(NESTED_TOO_DEEPLY)
     return payload
 
 

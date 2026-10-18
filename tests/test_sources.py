@@ -12,6 +12,7 @@ from starlette.datastructures import Headers
 
 from airflow_inbound_webhooks.naming import build_candidate_names
 from airflow_inbound_webhooks.sources import (
+    MAX_JSON_DEPTH,
     GitHubSource,
     GitLabSource,
     HmacJsonSource,
@@ -617,3 +618,41 @@ def test_json_constants_json_does_not_allow_are_refused(constant):
 
     with pytest.raises(ValueError, match="which JSON does not allow"):
         load_json_object(Headers(JSON), body)
+
+
+@pytest.mark.parametrize(
+    "number", ["1e400", "-1e400", "1" + "0" * 400 + ".5"], ids=["exponent", "negative", "digits"]
+)
+def test_numbers_too_large_for_a_float_are_refused(number):
+    # Python's json reads them as infinity, as if the body held Infinity.
+    body = f'{{"event": "deployed", "value": {number}}}'.encode()
+
+    with pytest.raises(ValueError, match="a number too large to store"):
+        load_json_object(Headers(JSON), body)
+
+
+def test_numbers_a_float_holds_are_read():
+    body = b'{"value": 1.5e300, "small": 1e-400, "integer": 12345678901234567890}'
+
+    assert load_json_object(Headers(JSON), body) == {
+        "value": 1.5e300,
+        "small": 0.0,
+        "integer": 12345678901234567890,
+    }
+
+
+def nest(depth: int) -> bytes:
+    """Return a JSON object whose objects and arrays nest ``depth`` levels deep, itself the first."""
+    return b'{"event": "deployed", "value": ' + b"[" * (depth - 1) + b"]" * (depth - 1) + b"}"
+
+
+def test_json_nested_as_deeply_as_allowed_is_read():
+    assert load_json_object(Headers(JSON), nest(MAX_JSON_DEPTH))["event"] == "deployed"
+
+
+@pytest.mark.parametrize(
+    "depth", [MAX_JSON_DEPTH + 1, 200_000], ids=["one-level-more", "past-python-recursion"]
+)
+def test_json_nested_more_deeply_than_allowed_is_refused(depth):
+    with pytest.raises(ValueError, match=f"nested more than {MAX_JSON_DEPTH} levels deep"):
+        load_json_object(Headers(JSON), nest(depth))

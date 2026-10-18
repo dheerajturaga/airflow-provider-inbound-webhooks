@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from airflow_inbound_webhooks import app
 from airflow_inbound_webhooks.app import build_app, get_asset_change_arguments
 from airflow_inbound_webhooks.models import delivery_table
-from airflow_inbound_webhooks.sources import GitHubSource
+from airflow_inbound_webhooks.sources import MAX_JSON_DEPTH, GitHubSource
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Row
@@ -1017,6 +1017,42 @@ def test_delivery_id_longer_than_can_be_stored_is_refused(client, session):
     assert response.status_code == 400
     assert response.json() == {"detail": "Delivery ID is longer than 255 characters"}
     assert get_deliveries(session) == []
+
+
+def add_to_labeled(field: str) -> bytes:
+    """Return LABELED as JSON with one more field, written as JSON text."""
+    return json.dumps(LABELED)[:-1].encode() + f', "added": {field}}}'.encode()
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+@pytest.mark.parametrize("number", ["Infinity", "1e400"])
+def test_number_the_database_cannot_store_is_refused(client, session, subscribe, number):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    response = post_github(client, body=add_to_labeled(number))
+
+    assert response.status_code == 400
+    assert get_deliveries(session) == []
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(max_event_payload_bytes="65536")})
+@pytest.mark.parametrize(
+    ("depth", "expected_status"),
+    [
+        pytest.param(MAX_JSON_DEPTH, 202, id="as-deep-as-allowed"),
+        pytest.param(MAX_JSON_DEPTH + 1, 400, id="deeper"),
+    ],
+)
+def test_body_nested_up_to_the_limit_is_recorded_and_deeper_is_refused(
+    client, session, subscribe, depth, expected_status
+):
+    # Measuring the payload and storing it walk it once per level, which must not run out of recursion.
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    response = post_github(client, body=add_to_labeled("[" * (depth - 1) + "]" * (depth - 1)))
+
+    assert response.status_code == expected_status
+    assert count_asset_events(session) == (1 if expected_status == 202 else 0)
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
