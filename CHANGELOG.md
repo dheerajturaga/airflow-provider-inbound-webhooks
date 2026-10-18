@@ -12,11 +12,12 @@ breaking change, listed under "Changed event names" with the old and new names.
 
 - Delivery records: every verified delivery is stored in a new table, `inbound_webhooks_delivery`,
   in the transaction that records its asset events. A retry, which repeats the sender's delivery ID
-  and the body, gets the answer the delivery got and records nothing, so a service's retries no
-  longer queue Dags again. A redelivery of a delivery that recorded nothing is processed again. A
+  and the body, is answered as a duplicate and records nothing, so a service's retries no longer
+  queue Dags again. A redelivery of a delivery that recorded nothing is processed again. A
   delivery ID longer than 255 characters is refused with `400`, and an empty one counts as none.
-- `outcome` and `delivery_id` in every answer. `outcome` is `accepted`, `no_subscribers`,
-  `dag_paused`, or `duplicate` for a retry, which is answered `200` instead of `202`.
+- `delivery_id` and `outcome`, which make up every `200` and `202` answer. `outcome` is `accepted`,
+  `no_subscribers`, `dag_paused`, or `duplicate` for a retry, which is answered `200` instead of
+  `202`.
 - `from_webhook`, `webhook`, `source_type`, `inbound_delivery_id` and `correlation_key` in each
   asset event's `extra`, the keys AIP-125 proposes for webhook events. `inbound_delivery_id` is the
   ID of the delivery's record, so an event leads back to its delivery while the record is kept, even
@@ -59,6 +60,11 @@ breaking change, listed under "Changed event names" with the old and new names.
   error that says why, which stops every Dag in that file, so keep Dags that schedule on topics in
   files of their own before turning the checks on. The checks are a cluster policy, which the
   package registers through the `airflow.policy` entry point.
+- A search for the deliveries the sender gave a delivery ID, the `delivery_id` of their answers: on
+  a webhook's page under **Browse → Webhook deliveries**, with
+  `GET /webhooks/_deliveries/<webhook>?delivery_id=<ID>` and with
+  `airflow webhooks deliveries <webhook> --delivery-id <ID>`. Several can share one, each with
+  another body.
 
 ### Changed
 
@@ -107,6 +113,22 @@ breaking change, listed under "Changed event names" with the old and new names.
   environment variables. The API server logs a warning once per worker and connection,
   `airflow webhooks check` reports them, and a later release will refuse them: set the connection's
   type to `inbound_webhook`.
+
+### Removed
+
+- `status`, `asset_events` and `candidates` from the `200` and `202` answers, which hold only
+  `delivery_id` and `outcome`, as AIP-125 proposes. Services show answers to people who need not be
+  Airflow users, as GitHub's **Recent Deliveries** and GitLab's **Recent events** do, and the asset
+  events a delivery recorded would tell them which Dags exist. Delivery records keep the asset
+  events and the names each delivery offered: find a delivery by the `delivery_id` of its answer
+  under **Browse → Webhook deliveries**, with `GET /webhooks/_deliveries/<webhook>?delivery_id=<ID>`
+  or with `airflow webhooks deliveries <webhook> --delivery-id <ID>`. The deliveries page and API
+  are not a public interface yet, so automation that read `asset_events` has no stable replacement
+  yet. Read `outcome` instead of `status`. Where `status` was `accepted`, `outcome` is `accepted`;
+  `duplicate`, answered `200`, for a retry, which 0.1.0 recorded again: treat a recognised retry as
+  a success; or `dag_paused` or `no_subscribers` for a delivery that 0.1.0 recorded although no Dag
+  that is not paused, draining or stale schedules on its names (see "Changed"). Where `status` was
+  `no_subscribers`, `outcome` is `no_subscribers`.
 
 ## 0.1.0 - 2026-10-14
 

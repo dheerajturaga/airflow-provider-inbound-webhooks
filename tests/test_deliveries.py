@@ -161,6 +161,80 @@ def test_deliveries_received_at_the_same_time_are_paged_without_gaps(client, add
     assert {delivery["id"] for delivery in first + second} == ids
 
 
+def test_deliveries_are_found_by_the_delivery_id_the_sender_gave_them(client, add_delivery):
+    # A retry is recognised by its body too, so several deliveries can have one delivery ID.
+    first = add_delivery(delivery_id="d-1", received_at=NOW - timedelta(minutes=1))
+    second = add_delivery(delivery_id="d-1", body_digest="1" * 64, received_at=NOW)
+    add_delivery(delivery_id="d-2")
+
+    listed = client.get("/_deliveries/github", params={"delivery_id": "d-1"}).json()["deliveries"]
+
+    assert [delivery["id"] for delivery in listed] == [second, first]
+
+
+@mock.patch.dict(os.environ, TEAM_A_CONNECTION)
+@pytest.mark.parametrize("path", ["/_deliveries/github", "/_ui/deliveries"])
+def test_deliveries_found_by_delivery_id_are_only_the_webhooks_teams(client, add_delivery, path):
+    ours = add_delivery(delivery_id="d-1", team_name="team_a")
+    theirs = add_delivery(delivery_id="d-1", body_digest="1" * 64, team_name="team_b")
+    other = add_delivery(delivery_id="d-2", team_name="team_a")
+
+    found = client.get(path, params={"webhook": "github", "delivery_id": "d-1"}).text
+
+    assert ours in found
+    assert theirs not in found
+    assert other not in found
+
+
+def test_page_finds_deliveries_by_delivery_id(client, add_delivery):
+    found = add_delivery(delivery_id="d-1")
+    other = add_delivery(delivery_id="d-2")
+
+    page = client.get("/_ui/deliveries", params={"webhook": "github", "delivery_id": "d-1"}).text
+
+    assert found in page
+    assert other not in page
+    # The search field keeps what was searched for.
+    assert "name='delivery_id' value='d-1'" in page
+    unknown = client.get("/_ui/deliveries", params={"webhook": "github", "delivery_id": "d-3"})
+    assert "No deliveries with this delivery ID" in unknown.text
+
+
+def test_page_search_left_blank_shows_every_delivery(client, add_delivery):
+    ids = [add_delivery(delivery_id="d-1"), add_delivery(delivery_id=None)]
+
+    page = client.get("/_ui/deliveries", params={"webhook": "github", "delivery_id": ""}).text
+
+    assert all(delivery in page for delivery in ids)
+
+
+def test_page_links_to_older_deliveries_with_the_delivery_id_searched_for(client, add_delivery):
+    oldest = add_delivery(delivery_id="d-1", received_at=NOW - timedelta(hours=1))
+    for minute in (1, 2):
+        digest = str(minute) * 64
+        add_delivery(delivery_id="d-1", body_digest=digest, received_at=NOW + timedelta(minutes=minute))
+    older_without_it = add_delivery(delivery_id="d-2", received_at=NOW - timedelta(hours=2))
+
+    with mock.patch.object(deliveries, "DEFAULT_LIMIT", 2):
+        page = client.get("/_ui/deliveries", params={"webhook": "github", "delivery_id": "d-1"}).text
+        link = page.split("<a href='?")[-1].split("'")[0].replace("&amp;", "&")
+        older = client.get(f"/_ui/deliveries?{link}").text
+
+    assert "delivery_id=d-1" in link
+    assert oldest in older
+    assert older_without_it not in older
+
+
+def test_page_escapes_the_delivery_id_searched_for(client):
+    # A link can carry any delivery ID to a reader.
+    searched = "'><img src=x onerror=alert(1)>"
+
+    page = client.get("/_ui/deliveries", params={"webhook": "github", "delivery_id": searched}).text
+
+    assert "<img" not in page
+    assert "value='&#x27;&gt;&lt;img src=x onerror=alert(1)&gt;'" in page
+
+
 def test_one_delivery_comes_with_its_payload(client, add_delivery):
     delivery = add_delivery()
 

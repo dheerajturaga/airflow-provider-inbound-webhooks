@@ -120,13 +120,15 @@ def list_rows(
     before: datetime | None = None,
     before_id: str | None = None,
     *,
+    delivery_id: str | None = None,
     every_team: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Return a webhook's deliveries, newest first and without their payloads.
 
     ``before`` and ``before_id`` page back from the last delivery of a page, so deliveries received at
-    the same time are neither skipped nor shown twice.
+    the same time are neither skipped nor shown twice. ``delivery_id`` keeps the deliveries the sender
+    gave that ID, the one its answer carries; several can share one, each with another body.
     """
     from airflow.utils.session import create_session
 
@@ -136,6 +138,10 @@ def list_rows(
     query = select(*(column for column in columns if column.name != "payload")).where(
         of_webhook(name, team, every_team=every_team)
     )
+    # Empty, as a search field left blank sends it, is no filter: no delivery is stored with an empty ID.
+    if delivery_id:
+        # The unique key on (webhook, delivery_id, body_digest) indexes this.
+        query = query.where(columns.delivery_id == delivery_id)
     if before is not None:
         before = as_utc(before)
         query = query.where(
@@ -175,10 +181,16 @@ def list_deliveries(
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
     before: datetime | None = None,
     before_id: str | None = None,
+    delivery_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return a webhook's deliveries, newest first, without payloads; ``before`` and ``before_id`` page back."""
+    """
+    Return a webhook's deliveries, newest first, without payloads.
+
+    ``before`` and ``before_id`` page back, and ``delivery_id`` keeps those the sender gave that ID.
+    """
     team = require_read(user, name)
-    return {"deliveries": jsonable_encoder(list_rows(name, team, limit, before, before_id))}
+    rows = list_rows(name, team, limit, before, before_id, delivery_id=delivery_id)
+    return {"deliveries": jsonable_encoder(rows)}
 
 
 @router.get("/_deliveries/{name}/{delivery}")
@@ -217,9 +229,13 @@ def get_readable_webhooks(user: Any) -> list[str]:
 
 @router.get("/_ui/deliveries", response_class=HTMLResponse)
 def deliveries_page(
-    user: ReaderDep, webhook: str | None = None, before: datetime | None = None, before_id: str | None = None
+    user: ReaderDep,
+    webhook: str | None = None,
+    before: datetime | None = None,
+    before_id: str | None = None,
+    delivery_id: str | None = None,
 ) -> HTMLResponse:
-    """List the webhooks the user may read, or one webhook's latest deliveries."""
+    """List the webhooks the user may read, or one webhook's latest deliveries or those with a delivery ID."""
     if webhook is None:
         names = get_readable_webhooks(user)
         items = "".join(
@@ -232,7 +248,13 @@ def deliveries_page(
         )
         return render_page("Webhook deliveries", (f"<ul>{items}</ul>" if names else "") + form)
     team = require_read(user, webhook)
-    rows = list_rows(webhook, team, DEFAULT_LIMIT, before, before_id)
+    rows = list_rows(webhook, team, DEFAULT_LIMIT, before, before_id, delivery_id=delivery_id)
+    # A delivery's answer gives the sender its delivery ID and nothing else, so that is what finds it.
+    search = (
+        f"<form method='get'><input type='hidden' name='webhook' value='{escape(webhook)}'>"
+        f"<label>Delivery ID <input name='delivery_id' value='{escape(delivery_id)}'></label> "
+        "<button>Find</button></form>"
+    )
     lines = "".join(
         "<tr>"
         f"<td><a href='deliveries/{escape(quote(webhook))}/{escape(quote(row['id']))}'>"
@@ -249,11 +271,22 @@ def deliveries_page(
     older = ""
     if len(rows) == DEFAULT_LIMIT:
         last = rows[-1]
+        # With the search, so older deliveries with the delivery ID follow.
+        searched = {"delivery_id": delivery_id} if delivery_id else {}
         query = urlencode(
-            {"webhook": webhook, "before": last["received_at"].isoformat(), "before_id": last["id"]}
+            {
+                "webhook": webhook,
+                **searched,
+                "before": last["received_at"].isoformat(),
+                "before_id": last["id"],
+            }
         )
         older = f"<p><a href='?{escape(query)}'>Older deliveries</a></p>"
-    return render_page(f"Deliveries to {webhook}", (table + older) if rows else "<p>No deliveries yet.</p>")
+    if rows:
+        found = table + older
+    else:
+        found = "<p>No deliveries with this delivery ID.</p>" if delivery_id else "<p>No deliveries yet.</p>"
+    return render_page(f"Deliveries to {webhook}", search + found)
 
 
 @router.get("/_ui/deliveries/{name}/{delivery}", response_class=HTMLResponse)

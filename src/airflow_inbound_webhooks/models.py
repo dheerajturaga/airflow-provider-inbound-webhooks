@@ -38,7 +38,7 @@ delivery_table = Table(
     Column("source_type", String(64), nullable=False),
     Column("path", String(1500)),
     Column("candidates", JSON, nullable=False),
-    # {asset name: asset event ID}, as in the response.
+    # {asset name: asset event ID}, as in the audit log entry.
     Column("asset_events", JSON, nullable=False),
     Column("correlation_key", String(255)),
     Column("outcome", String(32), nullable=False),

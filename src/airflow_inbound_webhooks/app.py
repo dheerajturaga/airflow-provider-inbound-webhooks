@@ -445,7 +445,7 @@ def find_delivery(
         return None
     columns = delivery_table.c
     return session.execute(
-        select(columns.id, columns.outcome, columns.asset_events, columns.candidates).where(
+        select(columns.id, columns.outcome).where(
             columns.webhook == webhook_name,
             columns.delivery_id == delivery_id,
             columns.body_digest == body_digest,
@@ -576,24 +576,23 @@ def notify_listeners(webhook: ConfiguredWebhook, notifications: list[Callable[[]
             log.exception("Webhook %s: an asset listener failed", webhook.name)
 
 
-def build_response(
-    delivery_id: str | None, outcome: str, asset_events: dict[str, int], candidates: list[str]
-) -> dict[str, Any]:
-    return {
-        "status": "accepted" if asset_events else "no_subscribers",
-        "outcome": outcome,
-        "delivery_id": delivery_id,
-        "asset_events": asset_events,
-        "candidates": candidates,
-    }
+def build_response(delivery_id: str | None, outcome: str) -> dict[str, Any]:
+    """
+    Return the answer to a delivery, which holds its delivery ID and outcome and nothing else.
+
+    Senders show answers to people who need not be Airflow users, as GitHub's Recent Deliveries tab
+    does, and the asset events a delivery recorded would tell them which Dags exist. The delivery's
+    row keeps those and the names it offered, for the Airflow users allowed to read it.
+    """
+    return {"delivery_id": delivery_id, "outcome": outcome}
 
 
 def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest: str) -> dict[str, Any]:
     """
     Record a verified delivery's asset events and its row in one transaction, and answer it.
 
-    A retry, which repeats a delivery that recorded events, gets the answer that delivery got and
-    records nothing. A delivery that recorded nothing is processed again.
+    A retry, which repeats a delivery that recorded events, is answered as a duplicate and records
+    nothing. A delivery that recorded nothing is processed again.
     """
     # Imported here rather than at module level: Airflow imports plugins in every process, including
     # each task run, and only the API server needs these.
@@ -625,9 +624,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
             # subscribing to one of its names is how its README walkthrough ends.
             if original is not None and original.outcome == ACCEPTED:
                 log.debug("Webhook %s: delivery %r was recorded before", webhook.name, event.delivery_id)
-                return build_response(
-                    event.delivery_id, DUPLICATE, original.asset_events, original.candidates
-                )
+                return build_response(event.delivery_id, DUPLICATE)
             # Chosen before the row is written, because every event carries it. A redelivery updates the
             # row of the delivery it repeats.
             record_id = str(uuid.uuid4()) if original is None else original.id
@@ -684,18 +681,21 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
                     raise RecordedMeanwhile
     except (IntegrityError, RecordedMeanwhile):
         # A copy that arrived while another was being recorded: rolling back the transaction undid its
-        # events, and it gets the answer that copy got.
+        # events. It is a retry only if that copy recorded events; otherwise it is answered as that
+        # copy was, since a redelivery of a delivery that recorded nothing is processed again.
         with create_session(scoped=False) as session:
             original = find_delivery(session, webhook.name, event.delivery_id, body_digest)
         if original is None:
             raise
-        return build_response(event.delivery_id, DUPLICATE, original.asset_events, original.candidates)
+        return build_response(
+            event.delivery_id, DUPLICATE if original.outcome == ACCEPTED else original.outcome
+        )
     # Only now: the copy that lost a race, and a delivery whose commit failed, notify no one.
     notify_listeners(webhook, notifications)
     if not asset_events:
         # Debug only: a webhook that sends every event would otherwise log most deliveries.
         log.debug("Webhook %s: no Dag schedules on any of its candidates %s", webhook.name, candidates)
-    return build_response(event.delivery_id, outcome, asset_events, candidates)
+    return build_response(event.delivery_id, outcome)
 
 
 router = APIRouter()
