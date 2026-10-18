@@ -53,6 +53,7 @@ from airflow.models.asset import (  # noqa: E402
 from airflow.models.connection import Connection  # noqa: E402
 from airflow.models.dag import DagModel  # noqa: E402
 from airflow.models.dagbundle import DagBundleModel  # noqa: E402
+from airflow.models.log import Log  # noqa: E402
 from airflow.utils.session import create_session  # noqa: E402
 from sqlalchemy import delete, select  # noqa: E402
 
@@ -61,6 +62,7 @@ from airflow_inbound_webhooks.models import delivery_table  # noqa: E402
 # Children first, so deletes satisfy foreign keys.
 CLEARED_MODELS = (
     delivery_table,
+    Log,
     AssetDagRunQueue,
     AssetEvent,
     DagScheduleAssetReference,

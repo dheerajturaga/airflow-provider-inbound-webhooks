@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import hashlib
+import importlib
 import inspect
+import json
 import logging
 import math
 import re
@@ -21,9 +24,11 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 from airflow.configuration import conf
 from airflow.exceptions import AirflowNotFoundException
 from airflow.sdk import Connection
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.exception_handlers import http_exception_handler
 from sqlalchemy import exists, or_, select, update
 from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError, ProgrammingError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from airflow_inbound_webhooks import configuration
 from airflow_inbound_webhooks.naming import build_candidate_names
@@ -37,6 +42,7 @@ from airflow_inbound_webhooks.sources import (
 
 if TYPE_CHECKING:
     from airflow.models.asset import AssetModel
+    from airflow.models.log import Log
     from sqlalchemy import ColumnElement, Select
     from sqlalchemy.engine import CursorResult, Row
     from sqlalchemy.orm import Session
@@ -56,6 +62,8 @@ DUPLICATE = "duplicate"
 # report one as a ProgrammingError, which is only answered as unavailable when the table is missing.
 UNAVAILABLE_DATABASE_ERRORS = (OperationalError, InterfaceError)
 UNAVAILABLE_RETRY_AFTER_SECONDS = 30
+# The tag value metrics give webhook names that are not listed, so random names add no metric series.
+UNLISTED_WEBHOOK_TAG = "other"
 # register_asset_change accepts and drops unknown keyword arguments, so an argument a later Airflow
 # renamed would be lost silently instead of failing. The team arguments only exist from Airflow 3.3.
 REQUIRED_ASSET_CHANGE_ARGUMENTS = frozenset({"asset", "extra", "session"})
@@ -83,6 +91,15 @@ def get_asset_change_arguments() -> frozenset[str]:
 
 def supports_team_attribution() -> bool:
     return get_asset_change_arguments() >= TEAM_ATTRIBUTION_ARGUMENTS
+
+
+@functools.cache
+def get_stats() -> Any:
+    """Return Airflow's ``Stats``, which moved to the Task SDK in Airflow 3.2."""
+    for module in ("airflow.sdk.observability.stats", "airflow.stats"):
+        with contextlib.suppress(ImportError):
+            return importlib.import_module(module).Stats
+    raise ImportError("Airflow's Stats is in neither airflow.sdk.observability.stats nor airflow.stats")
 
 
 @dataclass(frozen=True)
@@ -395,6 +412,27 @@ def find_subscribed_assets(session: Session, candidates: list[str]) -> tuple[lis
     return [], session.scalars(scheduled_by(not_stale).limit(1)).first() is not None
 
 
+def build_audit_log(webhook: ConfiguredWebhook, event: WebhookEvent, asset_events: dict[str, int]) -> Log:
+    """
+    Return the audit log entry for a delivery that recorded asset events.
+
+    It has no Dag or run, which the scheduler creates later, and a display name, without which
+    Airflow's audit log page shows no owner.
+    """
+    from airflow.models.log import Log
+
+    entry = Log(
+        event="webhook_delivery",
+        owner=f"webhook:{webhook.name}",
+        owner_display_name=f"Webhook {webhook.name}",
+        extra=json.dumps({"delivery_id": event.delivery_id, "asset_events": asset_events}),
+    )
+    # Audit log entries have a team only from Airflow 3.4.
+    if webhook.team_name and hasattr(Log, "team_name"):
+        setattr(entry, "team_name", webhook.team_name)
+    return entry
+
+
 def build_response(
     delivery_id: str | None, outcome: str, asset_events: dict[str, int], candidates: list[str]
 ) -> dict[str, Any]:
@@ -463,6 +501,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
                     asset_events[asset_model.name] = asset_event.id
             if asset_events:
                 outcome = EVENTS_RECORDED
+                session.add(build_audit_log(webhook, event, asset_events))
             else:
                 # Nothing is recorded for a paused Dag, so unpausing it never replays the delivery.
                 outcome = DAG_PAUSED if only_paused_subscribers else NO_SUBSCRIBERS
@@ -547,7 +586,8 @@ def receive_webhook(
             HTTPStatus.BAD_REQUEST, f"Delivery ID is longer than {MAX_DELIVERY_ID_LENGTH} characters"
         )
     try:
-        return record_delivery(webhook, event, hashlib.sha256(body).hexdigest())
+        with get_stats().timer("inbound_webhooks.delivery_duration", tags={"webhook": webhook.name}):
+            response = record_delivery(webhook, event, hashlib.sha256(body).hexdigest())
     except (*UNAVAILABLE_DATABASE_ERRORS, ProgrammingError) as e:
         # A ProgrammingError that is not about a missing table is a bug, which a sender's retries would
         # not fix.
@@ -566,6 +606,18 @@ def receive_webhook(
             "Temporarily unavailable",
             headers={"Retry-After": str(UNAVAILABLE_RETRY_AFTER_SECONDS)},
         ) from e
+    get_stats().incr(f"inbound_webhooks.deliveries.{response['outcome']}", tags={"webhook": webhook.name})
+    return response
+
+
+async def count_rejection(request: Request, exc: Exception) -> Response:
+    """Count a refused request by its status code, then answer it as FastAPI would."""
+    if not isinstance(exc, StarletteHTTPException):
+        raise exc
+    name = request.path_params.get("name")
+    tag = name if name in get_webhook_names() else UNLISTED_WEBHOOK_TAG
+    get_stats().incr(f"inbound_webhooks.rejections.{exc.status_code}", tags={"webhook": tag})
+    return await http_exception_handler(request, exc)
 
 
 def build_app() -> FastAPI:
@@ -573,4 +625,6 @@ def build_app() -> FastAPI:
     # schema would be served to anyone; only POST /webhooks/<name> should be.
     app = FastAPI(title="Airflow webhooks", docs_url=None, redoc_url=None, openapi_url=None)
     app.include_router(router)
+    # Starlette's, so a path or method the app does not serve is counted too.
+    app.add_exception_handler(StarletteHTTPException, count_rejection)
     return app
