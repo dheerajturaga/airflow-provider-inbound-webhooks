@@ -17,8 +17,10 @@ breaking change, listed under "Changed event names" with the old and new names.
   delivery ID longer than 255 characters is refused with `400`, and an empty one counts as none.
 - `outcome` and `delivery_id` in every answer. `outcome` is `accepted`, `no_subscribers`,
   `dag_paused`, or `duplicate` for a retry, which is answered `200` instead of `202`.
-- `from_webhook`, `webhook`, `source_type` and `correlation_key` in each asset event's `extra`, the
-  keys AIP-125 proposes for webhook events. `source` stays, holding the same as `webhook`, and
+- `from_webhook`, `webhook`, `source_type`, `inbound_delivery_id` and `correlation_key` in each
+  asset event's `extra`, the keys AIP-125 proposes for webhook events. `inbound_delivery_id` is the
+  ID of the delivery's record, so an event leads back to its delivery while the record is kept, even
+  when the service sends no delivery ID. `source` stays, holding the same as `webhook`, and
   `correlation_key` is `null` until a source type sets one.
 - `store_payload` for every source type: `full`, `summary` (only `jira` has one) or `none`, applied
   to asset events and delivery records alike. The defaults are unchanged: `jira` stores a summary,
@@ -65,6 +67,9 @@ breaking change, listed under "Changed event names" with the old and new names.
 - `gitlab` deliveries take their `delivery_id` from `Idempotency-Key`, which GitLab 17.4 and later
   keep across retries, instead of `X-Gitlab-Event-UUID`, which webhooks triggered by earlier webhooks
   share. Deliveries from older GitLab versions have no `delivery_id`.
+- On Airflow 3.3 and later, asset listeners hear of a delivery's asset events once it is committed,
+  rather than while the events are recorded, so never of events that are rolled back, and one that
+  fails is logged. On 3.1 and 3.2, Airflow still notifies them inside the transaction.
 
 ### Deprecated
 

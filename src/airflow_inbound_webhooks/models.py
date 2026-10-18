@@ -25,7 +25,8 @@ DAG_PAUSED = "dag_paused"
 delivery_table = Table(
     "inbound_webhooks_delivery",
     metadata,
-    # Assigned by the endpoint, since deliveries from senders without delivery IDs need rows too.
+    # Assigned by the endpoint, since deliveries from senders without delivery IDs need rows too. The
+    # delivery's asset events carry it in their extra, as inbound_delivery_id.
     Column("id", String(36), primary_key=True),
     Column("webhook", String(64), nullable=False),
     # The sender's ID for the delivery, or null if it sends none. With the body's SHA-256, unique per

@@ -17,10 +17,13 @@ from unittest import mock
 import pytest
 from airflow import settings
 from airflow.assets.manager import AssetManager
+from airflow.listeners import hookimpl
+from airflow.listeners.listener import get_listener_manager
 from airflow.models.asset import AssetDagRunQueue, AssetEvent
 from airflow.models.connection import Connection as ConnectionModel
 from airflow.models.dag import DagModel
 from airflow.models.log import Log
+from airflow.utils.session import create_session
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select, update
 from sqlalchemy.exc import OperationalError, ProgrammingError
@@ -157,6 +160,66 @@ def connection_lookups():
         yield get
 
 
+class AssetListener:
+    """An Airflow listener that notes the delivery record of each asset event it hears of."""
+
+    def __init__(self) -> None:
+        # (inbound_delivery_id, whether that record was committed when the listener heard of the event)
+        self.heard: list[tuple[str, bool]] = []
+
+    @hookimpl
+    def on_asset_event_emitted(self, asset_event) -> None:
+        record_id = asset_event.extra["inbound_delivery_id"]
+        with create_session(scoped=False) as session:
+            committed = session.scalar(select(delivery_table.c.id).where(delivery_table.c.id == record_id))
+        self.heard.append((record_id, committed is not None))
+
+
+@pytest.fixture
+def listener():
+    manager = get_listener_manager()
+    listener = AssetListener()
+    manager.add_listener(listener)
+    yield listener
+    manager.pm.unregister(listener)
+
+
+# Before 3.3, Airflow notifies listeners from inside the transaction that records an event.
+needs_callback_sink = pytest.mark.skipif(
+    not app.supports_callback_sink(),
+    reason="Listeners can only be notified after the commit from Airflow 3.3",
+)
+
+
+@pytest.fixture
+def notification():
+    """A listener notification that the mocked asset manager hands back, as Airflow 3.3 and later do."""
+    notify = mock.Mock()
+
+    def register_asset_change(*, callback_sink, **kwargs):
+        callback_sink.append(notify)
+        return mock.Mock(id=1)
+
+    with (
+        mock.patch("airflow.assets.manager.asset_manager", autospec=True) as asset_manager,
+        mock.patch.object(app, "supports_callback_sink", return_value=True),
+    ):
+        asset_manager.register_asset_change.side_effect = register_asset_change
+        yield notify
+
+
+def post_copy_that_lost_the_race(client: TestClient):
+    """Deliver LABELED again, as a copy that looked its delivery up before the first copy committed it."""
+    find_delivery = app.find_delivery
+
+    def find_after_the_first_delivery_committed(*args):
+        # The first lookup misses, as when both requests check before either has committed.
+        return None if find.call_count == 1 else find_delivery(*args)
+
+    with mock.patch.object(app, "find_delivery", side_effect=find_after_the_first_delivery_committed) as find:
+        return post_github(client)
+
+
 @mock.patch.dict(os.environ, GITHUB_CONN)
 def test_github_label_triggers_only_subscribed_dags(client, session, subscribe):
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
@@ -176,6 +239,7 @@ def test_github_label_triggers_only_subscribed_dags(client, session, subscribe):
     }
     assert len(body["candidates"]) == 9
     assert get_queued_dag_ids(session) == {"web_deploy_preview", "org_deploy_preview", "any_deploy_preview"}
+    (delivery,) = get_deliveries(session)
     assert session.scalars(select(AssetEvent.extra)).first() == {
         "from_webhook": True,
         "webhook": "github",
@@ -183,6 +247,7 @@ def test_github_label_triggers_only_subscribed_dags(client, session, subscribe):
         "source": "github",
         "path": "my-org/web",
         "delivery_id": "delivery-1",
+        "inbound_delivery_id": delivery.id,
         "correlation_key": None,
         "payload": LABELED,
     }
@@ -300,6 +365,7 @@ def test_jira_transition_stores_issue_summary(client, session, subscribe):
     assert response.status_code == 202
     assert response.json()["status"] == "accepted"
     assert get_queued_dag_ids(session) == {"deploy_ready_issues"}
+    (delivery,) = get_deliveries(session)
     assert session.scalars(select(AssetEvent.extra)).first() == {
         "from_webhook": True,
         "webhook": "jira",
@@ -307,6 +373,7 @@ def test_jira_transition_stores_issue_summary(client, session, subscribe):
         "source": "jira",
         "path": "OPS",
         "delivery_id": "webhook-1",
+        "inbound_delivery_id": delivery.id,
         "correlation_key": None,
         "payload": {**payload, "issue": {"key": "OPS-42", "fields": {"project": {"key": "OPS"}}}},
     }
@@ -547,6 +614,29 @@ def test_delivery_is_recorded_with_what_arrived(client, session, subscribe):
     assert delivery.received_at.tzinfo is not None
 
 
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_each_event_carries_the_id_of_its_delivery_record(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    subscribe("any_pull_request", "github/*/pull_request")
+
+    post_github(client)
+
+    (delivery,) = get_deliveries(session)
+    extras = list(session.scalars(select(AssetEvent.extra)))
+    assert [extra["inbound_delivery_id"] for extra in extras] == [delivery.id] * 2
+
+
+@mock.patch.dict(os.environ, DEPLOYBOT_CONN)
+def test_events_of_a_delivery_without_a_delivery_id_carry_the_id_of_its_record(client, session, subscribe):
+    subscribe("smoke_test_billing", "deploybot/billing/deployed")
+
+    post_deploybot(client, {"event": "deployed", "service": "billing"})
+
+    (delivery,) = get_deliveries(session)
+    extra = session.scalars(select(AssetEvent.extra)).one()
+    assert (extra["delivery_id"], extra["inbound_delivery_id"]) == (None, delivery.id)
+
+
 @mock.patch.dict(os.environ, build_conn_env("deploybot", **DEPLOYBOT_EXTRA, delivery_id_field="id"))
 def test_generic_source_recognises_retries_by_the_delivery_id_it_is_configured_with(
     client, session, subscribe
@@ -589,19 +679,67 @@ def test_retried_delivery_is_answered_as_before_and_not_recorded_again(client, s
 def test_retry_recorded_concurrently_gets_the_answer_of_the_delivery_it_repeats(client, session, subscribe):
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
     first = post_github(client)
-    find_delivery = app.find_delivery
 
-    def find_after_the_first_delivery_committed(*args):
-        # The first lookup misses, as when both requests check before either has committed.
-        return None if find.call_count == 1 else find_delivery(*args)
-
-    with mock.patch.object(app, "find_delivery", side_effect=find_after_the_first_delivery_committed) as find:
-        retry = post_github(client)
+    retry = post_copy_that_lost_the_race(client)
 
     assert retry.status_code == 200
     assert retry.json() == {**first.json(), "outcome": "duplicate"}
-    assert count_asset_events(session) == 1
-    assert len(get_deliveries(session)) == 1
+    (delivery,) = get_deliveries(session)
+    # The one event left is the first copy's, so it links to the record that was kept.
+    assert session.scalars(select(AssetEvent.extra)).one()["inbound_delivery_id"] == delivery.id
+
+
+@needs_callback_sink
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_listeners_hear_of_events_once_their_delivery_is_committed(client, session, subscribe, listener):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    subscribe("any_pull_request", "github/*/pull_request")
+
+    post_github(client)
+
+    (delivery,) = get_deliveries(session)
+    assert listener.heard == [(delivery.id, True)] * 2
+
+
+@needs_callback_sink
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_listeners_never_hear_of_a_copy_that_lost_the_race(client, session, subscribe, listener):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    post_github(client)
+
+    # The copy recorded an event under a record ID of its own, which rolled back with it.
+    assert post_copy_that_lost_the_race(client).json()["outcome"] == "duplicate"
+
+    (delivery,) = get_deliveries(session)
+    assert listener.heard == [(delivery.id, True)]
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_listeners_hear_nothing_of_a_delivery_that_fails_to_commit(session, subscribe, notification):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    commit_failure = OperationalError("COMMIT", {}, Exception("database is locked"))
+
+    with mock.patch.object(Session, "commit", side_effect=commit_failure):
+        response = post_github(TestClient(build_app(), raise_server_exceptions=False))
+
+    assert response.status_code == 503
+    notification.assert_not_called()
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_listener_that_fails_after_the_commit_is_logged(client, session, subscribe, notification, caplog):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    notification.side_effect = RuntimeError("listener failed")
+
+    response = post_github(client)
+
+    # Answered as recorded, which it is.
+    assert (response.status_code, response.json()["outcome"]) == (202, "accepted")
+    assert [delivery.outcome for delivery in get_deliveries(session)] == ["accepted"]
+    errors = [
+        record for record in caplog.records if record.name == app.__name__ and record.levelno == logging.ERROR
+    ]
+    assert [record.getMessage() for record in errors] == ["Webhook github: an asset listener failed"]
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
@@ -618,6 +756,36 @@ def test_redelivery_after_subscribing_records_the_delivery(client, session, subs
     assert [(delivery.outcome, delivery.payload) for delivery in get_deliveries(session)] == [
         ("accepted", LABELED)
     ]
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_events_of_a_redelivery_carry_the_id_of_the_record_it_updates(client, session, subscribe):
+    post_github(client)
+    (unmatched,) = get_deliveries(session)
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+
+    assert post_github(client).json()["outcome"] == "accepted"
+
+    assert [delivery.id for delivery in get_deliveries(session)] == [unmatched.id]
+    assert session.scalars(select(AssetEvent.extra)).one()["inbound_delivery_id"] == unmatched.id
+
+
+@mock.patch("airflow.assets.manager.asset_manager", autospec=True)
+@mock.patch.dict(os.environ, build_config_env(connection_cache_ttl="0"))
+def test_redelivery_records_the_team_its_events_are_now_attributed_to(
+    mock_asset_manager, client, session, subscribe
+):
+    # Only readers of the record's team are shown it, so it must be the team of the events it links to.
+    mock_asset_manager.register_asset_change.return_value.id = 1
+    with mock.patch.object(app, "supports_team_attribution", return_value=True):
+        with mock.patch.dict(os.environ, build_conn_env("github", team_name="team_a")):
+            assert post_github(client).json()["outcome"] == "no_subscribers"
+        subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+        with mock.patch.dict(os.environ, build_conn_env("github", team_name="team_b")):
+            assert post_github(client).json()["outcome"] == "accepted"
+
+    assert mock_asset_manager.register_asset_change.call_args.kwargs["api_user_teams"] == {"team_b"}
+    assert [delivery.team_name for delivery in get_deliveries(session)] == ["team_b"]
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
@@ -640,7 +808,7 @@ def test_redelivery_recorded_meanwhile_gets_the_answer_of_the_copy_that_recorded
 
     assert retry.status_code == 200
     assert retry.json() == {**first.json(), "outcome": "duplicate"}
-    assert count_asset_events(session) == 1
+    assert session.scalars(select(AssetEvent.extra)).one()["inbound_delivery_id"] == recorded.id
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
