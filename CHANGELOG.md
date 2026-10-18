@@ -24,6 +24,10 @@ breaking change, listed under "Changed event names" with the old and new names.
   to asset events and delivery records alike. The defaults are unchanged: `jira` stores a summary,
   every other source type the body as received. `summary` on another source type, which 0.1.0's
   form offered, still keeps the body as received, and logs a warning.
+- **Browse → Webhook deliveries** in the Airflow UI, and the same records as JSON under
+  `GET /webhooks/_deliveries/<name>`. Both need an Airflow login and permission to read the
+  webhook's connection.
+- `GET /webhooks/_health`, answered without a login.
 - An audit log entry for each delivery that records asset events, owned by `webhook:<name>`.
 - Metrics: `inbound_webhooks.deliveries.<outcome>`, `inbound_webhooks.rejections.<status>` and
   `inbound_webhooks.delivery_duration`, each tagged with the webhook.

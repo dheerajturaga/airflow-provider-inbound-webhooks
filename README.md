@@ -442,9 +442,9 @@ Deeper paths work the same way. For a GitLab project `platform/backend/api`,
 `platform` group, subgroups included, and `gitlab/*/...` every project.
 
 **Finding a name:** every response lists the names it offered as `candidates`, so send the event
-once and copy one. A delivery that matches no subscribed name is answered with
-`202 no_subscribers` and records no asset event; its [delivery record](#delivery-records) keeps its
-names, without the payload.
+once and copy one, or find the delivery under **Browse → Webhook deliveries**. A delivery that
+matches no subscribed name is answered with `202 no_subscribers` and records no asset event; its
+[delivery record](#delivery-records) keeps its names, without the payload.
 
 Non-ASCII characters are folded (`🚀 deploy` → `deploy`) on every database, because MySQL stores
 asset names as latin1 and fails any lookup that includes a non-ASCII name. Parts that end up empty
@@ -683,6 +683,30 @@ with an empty ID, are never taken for retries.
 `airflow db migrate` creates and upgrades the table, and `airflow db reset` drops it. On Airflow 3.1
 both need [`external_db_managers`](#compatibility). `airflow db clean` does not remove its rows.
 
+### Reading deliveries
+
+Under **Browse → Webhook deliveries**, the Airflow UI lists the webhooks in `webhook_names` whose
+deliveries you may read, and has a field for any other webhook's name. A webhook's page lists its
+latest deliveries: when each arrived, its outcome, delivery ID and path, and the asset events it
+recorded. Each delivery's page shows the names it offered and its stored payload, which makes it the
+place to find the name to subscribe to.
+
+The same records are served as JSON, to a bearer token from Airflow's `/auth/token` or the UI's
+session:
+
+| Route | Returns |
+|---|---|
+| `GET /webhooks/_deliveries/<name>?limit=50&before=<time>&before_id=<id>` | A webhook's deliveries, newest first, without payloads. `limit` is 1 to 500. To page back, pass the last delivery's `received_at` and `id` as `before` and `before_id` |
+| `GET /webhooks/_deliveries/<name>/<id>` | One delivery, with its payload |
+
+Reading a webhook's deliveries needs permission to read its connection, `webhook_<name>`, checked
+for the team its extra's `team_name` names, and shows only the deliveries attributed to that team. A
+webhook whose connection cannot be read shows nothing: Airflow reports a secrets backend it could
+not read as a missing connection, so there would be no team to check. The page and these routes are
+not a public interface yet, and can change in any release.
+
+`GET /webhooks/_health` answers `200` without a login, for load balancers and probes.
+
 ### Audit log and metrics
 
 A delivery that records asset events writes an entry to Airflow's audit log, in the same
@@ -697,7 +721,7 @@ The endpoint sends these metrics through Airflow's metrics configuration, each t
 | Metric | Type | Meaning |
 |---|---|---|
 | `inbound_webhooks.deliveries.<outcome>` | Counter | Answered deliveries, by `outcome` |
-| `inbound_webhooks.rejections.<status>` | Counter | Refused requests, by status code. Names not in `webhook_names` share the tag value `other` |
+| `inbound_webhooks.rejections.<status>` | Counter | Refused deliveries, by status code. Names not in `webhook_names` share the tag value `other` |
 | `inbound_webhooks.delivery_duration` | Timer | Time spent recording a verified delivery |
 
 ### Responses and troubleshooting
@@ -738,7 +762,11 @@ A `202` answer has these fields:
   reverse proxy in front that forwards only their paths, such as `/webhooks/github`, rather than
   exposing the whole Airflow UI and API, and have it rate-limit them. `rate_limit_per_minute` also
   limits each webhook's verified deliveries in each API server worker, which bounds what a chatty
-  sender writes; requests that fail verification never count against it.
+  sender writes; requests that fail verification never count against it. Forward each webhook's
+  path rather than all of `/webhooks`, which also holds the deliveries page and API.
+- **Reading deliveries needs a login.** The deliveries page and API under `/webhooks` need an
+  Airflow login, and permission to read the webhook's connection for the team its extra names.
+  Deliveries attributed to another team are not shown.
 - **Use HTTPS.** It matters most for `token_header` and GitLab, where the secret itself travels in a
   header.
 - **Use strong secrets, ideally from a secrets backend,** which keeps them out of the metadata
@@ -793,7 +821,7 @@ From 0.1.0 the project follows [Semantic Versioning](https://semver.org/) for it
 Below 1.0, a change that breaks any of them ships only in a new minor version, and the
 [changelog](CHANGELOG.md) describes it. The Python modules are not a public interface yet: code that
 imports from `airflow_inbound_webhooks` can break in any release. Neither are the messages in a
-response's `detail` or in the API server log.
+response's `detail` or in the API server log, nor the deliveries page and API.
 
 ## Limitations
 

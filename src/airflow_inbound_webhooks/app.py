@@ -556,6 +556,13 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
 router = APIRouter()
 
 
+@router.get("/_health")
+def health() -> dict[str, str]:
+    """Answer whether the endpoint is up, for load balancers and probes; no webhook can be named _health."""
+    # No database query: anyone can call it.
+    return {"status": "healthy"}
+
+
 # Also with a trailing slash: otherwise the router answers it with a redirect, which senders such as
 # GitHub do not follow, so a URL pasted with a slash would fail every delivery.
 @router.post("/{name}/", status_code=HTTPStatus.ACCEPTED)
@@ -611,19 +618,26 @@ def receive_webhook(
 
 
 async def count_rejection(request: Request, exc: Exception) -> Response:
-    """Count a refused request by its status code, then answer it as FastAPI would."""
+    """Count a refused delivery by its status code, then answer it as FastAPI would."""
     if not isinstance(exc, StarletteHTTPException):
         raise exc
-    name = request.path_params.get("name")
-    tag = name if name in get_webhook_names() else UNLISTED_WEBHOOK_TAG
-    get_stats().incr(f"inbound_webhooks.rejections.{exc.status_code}", tags={"webhook": tag})
+    # Deliveries are POSTs; the deliveries API and page refuse readers, not deliveries.
+    if request.method == "POST":
+        name = request.path_params.get("name")
+        tag = name if name in get_webhook_names() else UNLISTED_WEBHOOK_TAG
+        get_stats().incr(f"inbound_webhooks.rejections.{exc.status_code}", tags={"webhook": tag})
     return await http_exception_handler(request, exc)
 
 
 def build_app() -> FastAPI:
     # Airflow mounts plugin apps without authentication, so FastAPI's interactive docs and OpenAPI
     # schema would be served to anyone; only POST /webhooks/<name> should be.
+    # Imported here: it imports this module.
+    from airflow_inbound_webhooks.deliveries import router as deliveries_router
+
     app = FastAPI(title="Airflow webhooks", docs_url=None, redoc_url=None, openapi_url=None)
+    # First, so its paths are matched before /{name}.
+    app.include_router(deliveries_router)
     app.include_router(router)
     # Starlette's, so a path or method the app does not serve is counted too.
     app.add_exception_handler(StarletteHTTPException, count_rejection)
