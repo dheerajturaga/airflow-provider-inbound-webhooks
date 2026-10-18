@@ -531,12 +531,26 @@ who sent a delivery but not that it was unmodified, so it relies on TLS.
 ### `github`
 
 GitHub.com and GitHub Enterprise Server. An organization webhook covers every repository in the
-organization.
-
-Names use GitHub's own event and action names. The detail is the label for `labeled` and
-`unlabeled`, the branch for `push` (tag pushes have none), and the workflow name for
-`workflow_run`. A second GitHub instance is a second connection, e.g. `webhook_ghes` with extra
+organization. A second GitHub instance is a second connection, e.g. `webhook_ghes` with extra
 `{"source_type": "github"}`.
+
+Names use GitHub's own event and action names. They start with `github/<path>/`, where the path is
+the repository, such as `my-org/web`, also offered as `my-org/*` and `*`. A delivery about an
+organization rather than one of its repositories has the path `my-org/*`, also offered as `*`; one
+about neither has no path, so its names start with `github/`. After the path, one delivery offers:
+
+| Event | Names after `github/<path>/` | Detail |
+|---|---|---|
+| `pull_request` `labeled` | `pull_request`, `pull_request/labeled`, `pull_request/labeled/deploy-preview` | The label, for `labeled` and `unlabeled` on any event, such as `issues` |
+| `push` to a branch | `push`, `push/main` | The branch, slashes included: `push/release/2.0` |
+| `push` of a tag | `push` | None |
+| `workflow_run` `completed` | `workflow_run`, `workflow_run/completed`, `workflow_run/completed/CI` | The workflow's name |
+| Any other event, such as `release` `published` | `release`, `release/published` | None |
+| An event without an action, such as `ping` | `ping` | None |
+| An event about an organization, such as `organization` `member_added` | `organization`, `organization/member_added` | None |
+
+So `organization` `member_added` offers `github/my-org/*/organization/member_added`,
+`github/*/organization/member_added` and their prefixes.
 
 ### `gitlab`
 
@@ -667,9 +681,9 @@ things:
   file it parsed last, so a name declared as `Asset` in one file and as `WebhookTopic` in another
   switches between `asset` and `webhook`.
 
-Iterate over all events rather than taking the first: before Airflow 3.4, and on any Dag with
-`batch_asset_events`, deliveries that arrive before the scheduler creates a run share that run.
-Events are not ordered; sort by `event.timestamp` if order matters.
+Iterate over all events rather than taking the first: a run can carry several deliveries before
+Airflow 3.4, and from 3.4 when the Dag batches them; see [When Dags run](#when-dags-run). Events are
+not ordered; sort by `event.timestamp` if order matters.
 
 Besides `payload`, `extra` holds:
 
@@ -739,6 +753,60 @@ Installing the package registers the checks as an Airflow cluster policy in ever
 while `dag_checks` is `off`, the default, they return at once. Any value but `off` and `error`
 checks nothing either, and is logged as a warning once per process. There is no warning mode,
 because a warning that a cluster policy raises reaches only the Dag processor's log, never the UI.
+
+### When Dags run
+
+Airflow's scheduler creates the runs from the asset events a delivery records, one on each name a
+Dag schedules on. Which deliveries a run carries depends on the Airflow version.
+
+**Airflow 3.4 and later:** on a schedule of one name, or of names joined with `|`, each event starts
+its own run, also when several arrive before the scheduler's next pass, and the runs are created in
+the order their deliveries were recorded. To have the deliveries waiting for a Dag share its next
+run instead, set `batch_asset_events=True` on its timetable, as in
+`schedule=AssetTriggeredTimetable(assets=..., batch_asset_events=True)` with
+`AssetTriggeredTimetable` from `airflow.sdk`, or set `[scheduler] batch_asset_events = True` for
+every Dag whose timetable does not set it. A changed setting applies to a Dag once the Dag is parsed
+again, and `batch_asset_events=False` on a timetable keeps one run per event whatever the setting.
+
+**Before Airflow 3.4:** a Dag is queued at most once per name, and its run carries the events
+recorded on its names since its previous run, up to the last delivery that queued it. A delivery on
+a name the Dag is already queued for does not queue it again, so only a run that a later delivery
+queues carries it: of two deliveries on one name that arrive before the scheduler's next pass, or
+while the Dag is at `max_active_runs`, the first starts a run and the second only runs with a third.
+
+**Several names:** `schedule=[a, b]` means `a & b`: the Dag runs once each name has an event since
+its last run, and the run carries all of them. From 3.4 such a schedule always batches, and
+`batch_asset_events=False` on it fails when the Dag is parsed. `a | b` runs for an event on either
+name. One delivery matches a name and its prefixes, and records an event on each one a Dag
+schedules on, so `a | b` over a name and its prefix gives that delivery two runs from 3.4, and one
+run with both events before. Schedule a Dag on one name instead, the narrowest that covers every
+delivery it handles, and skip the ones it does not want in the task.
+
+**Missed deliveries and `catchup`:** a delivery that only paused Dags schedule on records nothing
+(`outcome` `dag_paused`), so no run carries it unless the sender delivers it again. When a Dag that
+is not paused also schedules on the name, the event is recorded. Whether a Dag that was paused at
+the time, or subscribed only later, runs for it depends on the version and on the Dag's `catchup`,
+which is off unless `[scheduler] catchup_by_default` turns it on:
+
+- From 3.4, a Dag with `catchup=False` runs only for events recorded while it was subscribed and
+  not paused. With `catchup=True`, the next delivery that queues it also starts runs for every
+  earlier event on its names that no run of the Dag carried, including those from before it
+  subscribed or while it was paused.
+- Before 3.4, a run carries the events recorded since the Dag's previous run whatever `catchup`
+  says, those recorded while it was paused included. A Dag's first run carries every earlier event
+  on its names, except on 3.3 with `catchup=False`, where it leaves out those from before the Dag
+  subscribed.
+
+`catchup=True` needs a `start_date`.
+
+**Order:** a Dag whose queued and running runs reach `max_active_runs` gets no new run until one
+finishes. From 3.4 its deliveries wait in order, so `max_active_runs=1` handles one delivery at a
+time, in the order they were recorded; before 3.4, a run can still carry several. With
+`max_active_runs` above 1, runs overlap and can finish in any order.
+
+**Manual runs:** a run started by hand, such as with `airflow dags trigger`, carries no events:
+`triggering_asset_events[asset]` is an empty list there, so check for an event in a task that needs
+one. Runs that deliveries start have an empty `dag_run.conf`; the delivery is only in the events.
 
 ## Reference
 
