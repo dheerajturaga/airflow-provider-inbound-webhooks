@@ -38,8 +38,10 @@ pytestmark = pytest.mark.usefixtures("clean_db")
 SECRET = "s3cret"
 
 
-def build_conn_env(name: str, *, password: str = SECRET, **extra) -> dict[str, str]:
-    conn = {"conn_type": "generic", "password": password, "extra": extra}
+def build_conn_env(
+    name: str, *, conn_type: str = "inbound_webhook", password: str = SECRET, **extra
+) -> dict[str, str]:
+    conn = {"conn_type": conn_type, "password": password, "extra": extra}
     return {f"AIRFLOW_CONN_WEBHOOK_{name.upper()}": json.dumps(conn)}
 
 
@@ -134,6 +136,7 @@ def forget_process_state() -> None:
     app.rereads_allowed_at.clear()
     app.warn_no_webhook_names.cache_clear()
     app.warn_any_webhook_name.cache_clear()
+    app.warn_connection_type.cache_clear()
     app.rate_limit_buckets.clear()
     app.database_error_log.last = -math.inf
 
@@ -429,7 +432,7 @@ def test_empty_extra_fields_are_unset(client, session, subscribe):
     [pytest.param("server", 202, id="api-server"), pytest.param("client", 404, id="other-process")],
 )
 def test_connection_stored_in_metadata_db(client, session, process_context, expected_status):
-    session.add(ConnectionModel(conn_id="webhook_github", conn_type="generic", password=SECRET))
+    session.add(ConnectionModel(conn_id="webhook_github", conn_type="inbound_webhook", password=SECRET))
     session.commit()
 
     with mock.patch.dict(os.environ, {"_AIRFLOW_PROCESS_CONTEXT": process_context}):
@@ -462,15 +465,17 @@ def test_rejected_delivery(client, session, subscribe, delivery, expected_status
 @pytest.mark.parametrize(
     "conn",
     [
-        pytest.param({"conn_type": "generic", "password": SECRET, "extra": {}}, id="unknown-source-type"),
-        pytest.param({"conn_type": "generic", "extra": {"source_type": "github"}}, id="no-secret"),
         pytest.param(
-            {"conn_type": "generic", "password": SECRET, "extra": {"source_type": "hmac_json"}},
+            {"conn_type": "inbound_webhook", "password": SECRET, "extra": {}}, id="unknown-source-type"
+        ),
+        pytest.param({"conn_type": "inbound_webhook", "extra": {"source_type": "github"}}, id="no-secret"),
+        pytest.param(
+            {"conn_type": "inbound_webhook", "password": SECRET, "extra": {"source_type": "hmac_json"}},
             id="incomplete-source-options",
         ),
         pytest.param(
             {
-                "conn_type": "generic",
+                "conn_type": "inbound_webhook",
                 "password": SECRET,
                 "extra": {"source_type": "github", "max_body_bytes": 0},
             },
@@ -478,7 +483,7 @@ def test_rejected_delivery(client, session, subscribe, delivery, expected_status
         ),
         pytest.param(
             {
-                "conn_type": "generic",
+                "conn_type": "inbound_webhook",
                 "password": SECRET,
                 "extra": {"source_type": "github", "team_name": "t" * 51},
             },
@@ -486,7 +491,7 @@ def test_rejected_delivery(client, session, subscribe, delivery, expected_status
         ),
         pytest.param(
             {
-                "conn_type": "generic",
+                "conn_type": "inbound_webhook",
                 "password": SECRET,
                 "extra": {"source_type": "github", "store_payload": "everything"},
             },
@@ -1004,6 +1009,20 @@ def test_serving_any_webhook_name_is_deprecated(client, caplog):
     # Once per process: a warning on every delivery would flood the log.
     assert len(warnings) == 1
     assert "webhook_names = * is deprecated" in warnings[0]
+
+
+@mock.patch.dict(
+    os.environ,
+    {**build_conn_env("github", conn_type="generic"), **build_config_env(connection_cache_ttl="0")},
+)
+def test_connection_of_another_type_is_served_but_deprecated(client, caplog):
+    # Read for each delivery, and logged once.
+    statuses = [post_github(client, delivery_id=f"delivery-{i}").status_code for i in range(2)]
+
+    assert statuses == [202, 202]
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "webhook_github has the type generic, which is deprecated" in warnings[0]
 
 
 @mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="github")})

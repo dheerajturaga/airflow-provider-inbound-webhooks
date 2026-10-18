@@ -114,6 +114,7 @@ def check(args: argparse.Namespace) -> None:
         configure_webhook,
         get_webhook_names,
     )
+    from airflow_inbound_webhooks.connection_form import CONN_TYPE
     from airflow_inbound_webhooks.db import WebhooksDBManager
 
     if not WEBHOOK_NAME_PATTERN.fullmatch(args.name):
@@ -126,11 +127,12 @@ def check(args: argparse.Namespace) -> None:
             "deliveries are answered with 404"
         )
     conn_id = f"{CONN_ID_PREFIX}{args.name}"
-    webhook = None
+    conn = webhook = None
     try:
         # The core model, not airflow.sdk's Connection, which reads the metadata database only in the API
         # server.
-        webhook = configure_webhook(args.name, Connection.get_connection_from_secrets(conn_id))
+        conn = Connection.get_connection_from_secrets(conn_id)
+        webhook = configure_webhook(args.name, conn)
     except AirflowNotFoundException:
         problems.append(f"there is no connection {conn_id}")
     except HTTPException as e:
@@ -143,6 +145,12 @@ def check(args: argparse.Namespace) -> None:
         print(f"Team: {webhook.team_name or 'none'}")
         print(f"Stored payload: {webhook.store_payload}")
         print(f"Maximum body size: {webhook.max_body_bytes} bytes")
+    if conn is not None and conn.conn_type != CONN_TYPE:
+        print(
+            f"Warning: connection {conn_id} has the type {conn.conn_type or 'none'}, which is deprecated: "
+            f"a later release will only serve connections of type {CONN_TYPE}",
+            file=sys.stderr,
+        )
     for problem in problems:
         print(f"Problem: {problem}", file=sys.stderr)
     if problems:

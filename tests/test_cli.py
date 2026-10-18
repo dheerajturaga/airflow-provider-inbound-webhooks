@@ -22,7 +22,9 @@ from airflow_inbound_webhooks.models import delivery_table
 
 pytestmark = pytest.mark.usefixtures("clean_db")
 
-GITHUB_CONN = {"AIRFLOW_CONN_WEBHOOK_GITHUB": json.dumps({"conn_type": "generic", "password": "s3cret"})}
+GITHUB_CONN = {
+    "AIRFLOW_CONN_WEBHOOK_GITHUB": json.dumps({"conn_type": "inbound_webhook", "password": "s3cret"})
+}
 
 
 def get_delivery_ids(session) -> set[str]:
@@ -36,6 +38,17 @@ def test_check_reports_a_webhook_ready_for_deliveries(capsys):
     out = capsys.readouterr().out
     assert "Source type: github" in out
     assert "Webhook github is ready" in out
+
+
+@mock.patch.dict(
+    os.environ, {"AIRFLOW_CONN_WEBHOOK_GITHUB": json.dumps({"conn_type": "generic", "password": "s3cret"})}
+)
+def test_check_warns_about_a_connection_of_another_type(capsys):
+    cli.main(["check", "github"])
+
+    out, err = capsys.readouterr()
+    assert "Webhook github is ready" in out
+    assert "connection webhook_github has the type generic, which is deprecated" in err
 
 
 def test_check_finds_connections_stored_in_the_metadata_database(session, capsys):
@@ -55,7 +68,11 @@ def test_check_finds_connections_stored_in_the_metadata_database(session, capsys
         pytest.param(
             {
                 "AIRFLOW_CONN_WEBHOOK_GITHUB": json.dumps(
-                    {"conn_type": "generic", "password": "s3cret", "extra": {"source_type": "bitbucket"}}
+                    {
+                        "conn_type": "inbound_webhook",
+                        "password": "s3cret",
+                        "extra": {"source_type": "bitbucket"},
+                    }
                 )
             },
             "connection webhook_github is misconfigured: unknown source_type 'bitbucket'",
