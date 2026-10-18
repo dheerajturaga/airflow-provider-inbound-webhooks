@@ -13,6 +13,25 @@ from packaging.utils import canonicalize_name
 
 from airflow_inbound_webhooks.get_provider_info import get_provider_info
 
+# Airflow imports the package for its provider metadata in every process, so Dag files alone should
+# import what only they use.
+DISCOVER_PROVIDER = """
+import sys
+import airflow_inbound_webhooks
+from airflow_inbound_webhooks.get_provider_info import get_provider_info
+get_provider_info()
+print(*sys.modules)
+"""
+
+
+def test_provider_discovery_leaves_the_task_sdk_unimported():
+    # A fresh interpreter, because this test session has imported the Task SDK already.
+    result = subprocess.run(
+        [sys.executable, "-c", DISCOVER_PROVIDER], capture_output=True, text=True, check=True
+    )
+
+    assert {"airflow.sdk", "airflow_inbound_webhooks.topics"} & set(result.stdout.split()) == set()
+
 
 def test_provider_info_conforms_to_the_installed_airflow_schema():
     schema = json.loads(files("airflow").joinpath("provider_info.schema.json").read_text())

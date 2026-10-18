@@ -130,14 +130,10 @@ def check(args: argparse.Namespace) -> None:
     from airflow.utils.session import create_session
     from fastapi import HTTPException
 
-    from airflow_inbound_webhooks.app import (
-        CONN_ID_PREFIX,
-        WEBHOOK_NAME_PATTERN,
-        configure_webhook,
-        get_webhook_names,
-    )
+    from airflow_inbound_webhooks.app import CONN_ID_PREFIX, configure_webhook, get_webhook_names
     from airflow_inbound_webhooks.connection_form import CONN_TYPE
     from airflow_inbound_webhooks.db import WebhooksDBManager
+    from airflow_inbound_webhooks.naming import WEBHOOK_NAME_PATTERN
 
     if not WEBHOOK_NAME_PATTERN.fullmatch(args.name):
         sys.exit(f"{args.name!r} cannot be a webhook name: use lowercase letters, digits, - and _")

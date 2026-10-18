@@ -589,14 +589,17 @@ and `parse()`; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Writing Dags
 
-Schedule on an event name and read the delivery from `triggering_asset_events`. Each event's
-`extra` holds the payload, or for Jira a summary of it, unless the connection's `store_payload`
-says otherwise or the payload is larger than [`max_event_payload_bytes`](#configuration):
+Schedule on a webhook topic, an event name as a `WebhookTopic`, and read the delivery from
+`triggering_asset_events`. Each event's `extra` holds the payload, or for Jira a summary of it,
+unless the connection's `store_payload` says otherwise or the payload is larger than
+[`max_event_payload_bytes`](#configuration):
 
 ```python
-from airflow.sdk import Asset, dag, task
+from airflow.sdk import dag, task
 
-deployed = Asset("demo/*/deployed")
+from airflow_inbound_webhooks import WebhookTopic
+
+deployed = WebhookTopic(webhook="demo", path="*", event="deployed")
 
 
 @dag(schedule=deployed)
@@ -611,6 +614,29 @@ def on_any_deployment():
 
 on_any_deployment()
 ```
+
+`WebhookTopic` takes the parts of an [event name](#event-names) as keywords, `webhook`, `path`,
+`event`, `action` and `detail`, and builds the name as the plugin names deliveries: `deployed` above
+is `demo/*/deployed`. Only `webhook` and `event` are required. A `path` can hold several segments,
+with `*` in place of trailing ones, as in `my-org/*`. An event without an action, such as GitHub's
+`push`, takes its detail right after it: `event="push", detail="main"`. Values are folded to ASCII
+as delivery names are, so `detail="🚀 Café"` subscribes to the label `🚀 Café`. `WebhookTopic` also
+takes the whole name, as a response's `candidates` list it:
+`WebhookTopic("github/my-org/web/pull_request/labeled/deploy-preview")`. A name that no delivery
+offers, such as one that is not folded to ASCII, is refused, with the name it may stand for.
+
+A topic is an asset in the group `webhook`. It refuses `extra` and `watchers`, because only
+deliveries record its events, and takes `access_control` on Airflow 3.3 and later; assets have none
+on 3.1 and 3.2. The plugin and the scheduler match by name, so `Asset("demo/*/deployed")` keeps
+working and matches the same deliveries; `WebhookTopic` is the form AIP-125 documents. It costs two
+things:
+
+- Dag files that use it import this package, so it must be installed wherever Dag files are parsed:
+  on the Dag processor and on the workers, which parse a Dag file to run its tasks, not only on the
+  API server.
+- The group `webhook` is only a label. Airflow keeps one group per asset name, set by whichever Dag
+  file it parsed last, so a name declared as `Asset` in one file and as `WebhookTopic` in another
+  switches between `asset` and `webhook`.
 
 Iterate over all events rather than taking the first: before Airflow 3.4, and on any Dag with
 `batch_asset_events`, deliveries that arrive before the scheduler creates a run share that run.
@@ -640,8 +666,9 @@ payload defensively. Anyone who can read asset events can read the payload too; 
 [Security](#security).
 
 More examples, for GitHub labels and pushes, organization-wide releases and GitLab pipelines, are in
-[`examples/dags/ci_cd.py`](examples/dags/ci_cd.py), and for Jira transitions and new issues in
-[`examples/dags/jira_issues.py`](examples/dags/jira_issues.py).
+[`examples/dags/ci_cd.py`](examples/dags/ci_cd.py), for Jira transitions and new issues in
+[`examples/dags/jira_issues.py`](examples/dags/jira_issues.py), and for both forms of
+`WebhookTopic` in [`examples/dags/webhook_topics.py`](examples/dags/webhook_topics.py).
 
 ## Reference
 
@@ -865,12 +892,15 @@ From 0.1.0 the project follows [Semantic Versioning](https://semver.org/) for it
 - [event names](#event-names);
 - each asset event's `extra`: the keys `from_webhook`, `webhook`, `source_type`, `source`, `path`,
   `delivery_id`, `inbound_delivery_id`, `correlation_key`, `payload` and `payload_truncated`, and
-  for `jira` the issue fields its summary keeps.
+  for `jira` the issue fields its summary keeps;
+- `WebhookTopic`, imported from `airflow_inbound_webhooks`: its arguments, the names it builds and
+  its group `webhook`.
 
 Below 1.0, a change that breaks any of them ships only in a new minor version, and the
-[changelog](CHANGELOG.md) describes it. The Python modules are not a public interface yet: code that
-imports from `airflow_inbound_webhooks` can break in any release. Neither are the messages in a
-response's `detail` or in the API server log, nor the deliveries page and API.
+[changelog](CHANGELOG.md) describes it. Apart from `WebhookTopic`, which Dag files import, the
+Python modules are not a public interface yet: code that imports anything else from
+`airflow_inbound_webhooks` can break in any release. Neither are the messages in a response's
+`detail`, in an error or in the API server log, nor the deliveries page and API.
 
 ## Limitations
 
