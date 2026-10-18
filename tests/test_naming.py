@@ -252,6 +252,19 @@ def test_names_one_delivery_offers_together(name, other, delivery):
         pytest.param("github/my-org/web/push", "github/my-org/web/*/push", id="path-and-paths-below-it"),
         pytest.param("github/*/push", "github/push", id="with-and-without-a-path"),
         pytest.param("github/my-org/web/push", "gitlab/my-org/web/push", id="webhooks"),
+        # An event named like another, read after a wildcard as if it were a path segment.
+        pytest.param("github/*/push/release", "github/*/release", id="branch-named-like-an-event"),
+        pytest.param(
+            "github/my-org/*/push/release", "github/my-org/*/release/published", id="in-an-organization"
+        ),
+        pytest.param("github/*/pull_request/labeled/release", "github/*/release", id="label-named-so"),
+        pytest.param(
+            "github/*/workflow_run/completed/release", "github/*/release/published", id="workflow-named-so"
+        ),
+        pytest.param("gitlab/*/push/release", "gitlab/*/release", id="gitlab-branch-named-so"),
+        pytest.param(
+            "gitlab/platform/*/push/release", "gitlab/platform/*/release/create", id="in-a-gitlab-group"
+        ),
         # A Jira update that changes the status and adds the label offers both, through two kinds.
         pytest.param(
             "jira/OPS/issue_updated/status/Done",
@@ -270,3 +283,27 @@ def test_segment_holding_a_slash_is_compared_as_two():
     assert can_be_offered_together(
         "github/my-org/web/pull_request/labeled/kind", "github/my-org/web/pull_request/labeled/kind/bug"
     )
+
+
+@pytest.mark.parametrize(
+    ("name", "other", "delivery"),
+    [
+        pytest.param(
+            "github/my-org/*/release",
+            "github/my-org/web/push/release",
+            build_event("my-org/web/push", ("release",)),
+            id="path-of-three-segments",
+        ),
+        pytest.param(
+            "github/*/release",
+            "github/my-org/release/push",
+            build_event("my-org", ("release", "push")),
+            id="path-of-one-segment",
+        ),
+    ],
+)
+def test_how_many_segments_a_path_has_is_not_known(name, other, delivery):
+    # GitHub's paths have two segments, so no GitHub delivery offers both, but a delivery to a webhook
+    # of another source type can: names alone cannot tell.
+    assert {name, other} <= set(build_candidate_names("github", delivery))
+    assert can_be_offered_together(name, other)

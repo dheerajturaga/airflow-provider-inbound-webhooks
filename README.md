@@ -648,30 +648,45 @@ things:
   switches between `asset` and `webhook`.
 
 **Checks:** with [`dag_checks`](#configuration) set to `error` where Dag files are parsed, Airflow
-refuses to load a Dag that uses a `WebhookTopic` in a way no delivery can serve, and the Dag file
-shows an import error that says why:
+refuses to load a Dag that uses a `WebhookTopic` in a way no delivery can serve:
 
 - a topic in a task's `outlets` or `inlets`: only deliveries record a topic's events, and a topic
   is not data a task reads;
 - a `PartitionedAssetTimetable` over a topic, on Airflow 3.2 and later: topic events carry no
   partition key, so the Dag would never run;
-- two topics in one `|` condition that one delivery can both match, such as a name and its prefix
-  (`.../pull_request` and `.../pull_request/labeled`) or a name and its wildcard form
-  (`github/my-org/web/push` and `github/*/push`). Each matched name records its own event, so the
-  Dag gets the delivery twice: as two runs from Airflow 3.4, where each event starts its own run,
-  or as two events of one run before 3.4 and with `batch_asset_events`. Schedule one topic per Dag.
+- two topics that one delivery can both match, such as a name and its prefix (`.../pull_request`
+  and `.../pull_request/labeled`) or a name and its wildcard form (`github/my-org/web/push` and
+  `github/*/push`), in a condition joined by `|` alone. Each matched name records its own event,
+  and from Airflow 3.4 each event starts its own run, so the Dag runs twice for that delivery. A
+  condition with an `&` of several assets, a list included, batches the events into one run, as
+  does a timetable with `batch_asset_events`, so neither is checked; before 3.4 every run batches,
+  but such a Dag is refused there too, ahead of the upgrade. Schedule one topic per Dag.
 
-The checks look only at `WebhookTopic`s, so a Dag that schedules on `Asset(name)` is never refused,
-and they guard against mistakes, not misuse: a plain `Asset` on a topic's name can still be an
-outlet. They see one Dag at a time, so they cannot see the same name declared as an `Asset`
-elsewhere. And they compare names, not deliveries: two names that one delivery offers through two
-of its kinds, such as a Jira update that changes the status and adds a label, are not caught, while
-a label or branch that holds a `/` can make two names look related that GitHub never offers
-together, such as the labels `kind` and `kind/bug`.
+A refused Dag makes its file an import error, which says why, and that stops every Dag in the file,
+not only the refused one: Airflow marks all of them as stale, so they no longer run and deliveries
+no longer reach them. Keep Dags that schedule on topics in files of their own before you turn the
+checks on. When several Dags of one file are refused, the import error gives one of their reasons.
+
+The checks have limits:
+
+- They look only at `WebhookTopic`s: a Dag that schedules on `Asset(name)` is never refused, and a
+  plain `Asset` on a topic's name can still be an outlet. They guard against mistakes, not misuse.
+- They see one Dag at a time, so they cannot see the same name declared as an `Asset` elsewhere.
+- From Airflow 3.2 they do not see topics in a timetable imported from `airflow.timetables` rather
+  than `airflow.sdk`, which turns them into plain assets.
+- They compare names, not deliveries, and do not know the webhook's source type. Two names that one
+  delivery offers through two of its kinds, such as a Jira update that changes the status and adds
+  a label, are not caught. And two names can look related that a GitHub delivery never offers
+  together: the labels `kind` and `kind/bug`, whose `/` reads as a segment boundary, or
+  `github/my-org/*/release` and `github/my-org/web/push/release`, which a path of three segments,
+  such as a GitLab project's, offers together, but a GitHub path never has three. For such a pair,
+  declare one side as a plain `Asset(name)`, which the checks ignore, or schedule the two in two
+  Dags.
 
 Installing the package registers the checks as an Airflow cluster policy in every Airflow process;
-while `dag_checks` is `off`, the default, they return at once. There is no warning mode, because a
-warning that a cluster policy raises reaches only the Dag processor's log, never the UI.
+while `dag_checks` is `off`, the default, they return at once. Any value but `off` and `error`
+checks nothing either, and is logged as a warning once per process. There is no warning mode,
+because a warning that a cluster policy raises reaches only the Dag processor's log, never the UI.
 
 Iterate over all events rather than taking the first: before Airflow 3.4, and on any Dag with
 `batch_asset_events`, deliveries that arrive before the scheduler creates a run share that run.
@@ -738,7 +753,7 @@ are parsed:
 |---|---|---|
 | `webhook_names` | empty | Comma-separated names of the webhooks to serve, such as `github,jira`. Requests for any other name are answered with `404` without looking up a connection. Empty serves no webhook, and the API server log says so once. `*` serves any name and reads its connection on every delivery, which lets anyone who can reach the endpoint make a call to your secrets backend; it is deprecated, logs a warning, and will be removed in a later release. Changes need an API server restart. |
 | `connection_cache_ttl` | `60` | Seconds a listed webhook's connection is reused before it is read again, including a missing or misconfigured one. A changed option takes up to this long to apply. A delivery that fails verification has the connection read again, at most once per this period, so a secret changed in the connection applies to the first delivery signed with it. `0` reads the connection on every delivery. |
-| `dag_checks` | `off` | `error` refuses to load a Dag that uses a `WebhookTopic` in a way no delivery can serve: in a task's `outlets` or `inlets`, in a `PartitionedAssetTimetable`, or in a `\|` condition with another topic that one delivery can also match. Its Dag file then shows an import error that says why; see "Checks" under [Writing Dags](#writing-dags). Set the same value on the Dag processor and the workers, which parse Dag files: a worker that refuses a Dag cannot run its tasks. `off` checks nothing. There is no warning mode: a warning that a cluster policy raises reaches only the Dag processor's log. |
+| `dag_checks` | `off` | `error` refuses to load a Dag that uses a `WebhookTopic` in a way no delivery can serve: in a task's `outlets` or `inlets`, in a `PartitionedAssetTimetable`, or in a `\|` condition with another topic that one delivery can also match. Its Dag file then shows an import error that says why, and every Dag in that file stops running, not only the refused one, so keep Dags that schedule on topics in files of their own first; see "Checks" under [Writing Dags](#writing-dags). Set the same value on the Dag processor and the workers, which parse Dag files: a worker that refuses a Dag cannot run its tasks. `off` checks nothing, and so does any other value, with a warning in the log. There is no warning mode: a warning that a cluster policy raises reaches only the Dag processor's log. |
 | `delivery_retention` | `7` | Days of delivery records that `airflow webhooks clean` keeps unless told otherwise. Keep it longer than any of your services retries a delivery: a retry that comes after its first delivery's record is deleted is recorded again. |
 | `max_event_payload_bytes` | `0` | Bytes of the largest payload copied into a delivery's asset events, measured as compact JSON in UTF-8 after `store_payload`, so for `jira` the summary is measured. A larger payload is left out: the events have `payload` `null` and `payload_truncated` `true`. The delivery record keeps the payload, and the deliveries page and API show it, until `airflow webhooks clean` deletes the record after `delivery_retention` days. `0` copies every payload. AIP-125 proposes `65536` as Airflow's default. |
 | `rate_limit_per_minute` | `0` | Verified deliveries each API server worker records per webhook and minute; more are answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification do not count, so they cannot use the limit up. Each worker counts on its own, so N workers record up to N times as many. GitLab disables a webhook after four failed deliveries in a row, `429` included, so set the limit above what a GitLab webhook sends. `0` turns the limit off. |

@@ -4,8 +4,10 @@
 Parse-time checks of Dags that use webhook topics, as an Airflow cluster policy.
 
 The ``airflow.policy`` entry point has Airflow import this module in every process while it
-initializes, so it imports only Airflow modules loaded by then and none of its own that need the Task
-SDK, and ``dag_policy`` returns at once unless ``[inbound_webhooks] dag_checks`` is ``error``.
+initializes, and an error raised importing it would stop every process from starting, checks on or
+off. So importing it only defines the policy, with Airflow's hookimpl marker; what the checks need is
+imported when a Dag is checked, and ``dag_policy`` returns at once unless
+``[inbound_webhooks] dag_checks`` is ``error``.
 """
 
 from __future__ import annotations
@@ -17,11 +19,12 @@ import sys
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from airflow.configuration import conf
-from airflow.exceptions import AirflowClusterPolicyViolation
-from airflow.policies import hookimpl
+try:
+    from airflow.policies import hookimpl
+except ImportError:  # Should Airflow move its marker, pluggy's of the same name is the same marker.
+    from pluggy import HookimplMarker
 
-from airflow_inbound_webhooks import configuration, naming
+    hookimpl = HookimplMarker("airflow.policy")
 
 if TYPE_CHECKING:
     from airflow.sdk import DAG
@@ -39,6 +42,10 @@ def dag_policy(dag: DAG) -> None:
     if TOPICS_MODULE not in sys.modules or not are_checks_on():
         return
     if problems := find_problems(dag):
+        from airflow.exceptions import AirflowClusterPolicyViolation
+
+        from airflow_inbound_webhooks import configuration
+
         raise AirflowClusterPolicyViolation(
             f"Dag {dag.dag_id!r} uses webhook topics in ways no delivery can serve, which "
             f"[{configuration.SECTION}] {configuration.DAG_CHECKS} = {configuration.DAG_CHECKS_ERROR} "
@@ -47,6 +54,10 @@ def dag_policy(dag: DAG) -> None:
 
 
 def are_checks_on() -> bool:
+    from airflow.configuration import conf
+
+    from airflow_inbound_webhooks import configuration
+
     value = conf.get(configuration.SECTION, configuration.DAG_CHECKS, fallback=configuration.DAG_CHECKS_OFF)
     if (value := value.strip().lower()) not in (configuration.DAG_CHECKS_OFF, configuration.DAG_CHECKS_ERROR):
         warn_unknown_dag_checks(value)
@@ -55,6 +66,8 @@ def are_checks_on() -> bool:
 
 @functools.cache
 def warn_unknown_dag_checks(value: str) -> None:
+    from airflow_inbound_webhooks import configuration
+
     log.warning(
         "[%s] %s is %r rather than %s or %s, so Dags are not checked",
         configuration.SECTION,
@@ -67,6 +80,7 @@ def warn_unknown_dag_checks(value: str) -> None:
 
 def find_problems(dag: DAG) -> list[str]:
     """Describe each way the Dag uses a topic that no delivery can serve."""
+    from airflow_inbound_webhooks import naming
     from airflow_inbound_webhooks.topics import WebhookTopic
 
     problems = []
@@ -85,20 +99,20 @@ def find_problems(dag: DAG) -> list[str]:
                 )
     if (condition := getattr(dag.timetable, "asset_condition", None)) is None:
         return problems
+    names = dict.fromkeys(obj.name for obj in iter_assets(condition) if isinstance(obj, WebhookTopic))
     if isinstance(dag.timetable, get_partitioned_timetables()):
-        topics = (obj for obj in iter_assets(condition) if isinstance(obj, WebhookTopic))
-        for name in dict.fromkeys(topic.name for topic in topics):
+        for name in names:
             problems.append(
                 f"it schedules on the webhook topic {name!r} with a PartitionedAssetTimetable, which "
                 "never runs for it: topic events have no partition key"
             )
-    for group in iter_or_groups(condition):
-        names = dict.fromkeys(obj.name for obj in group if isinstance(obj, WebhookTopic))
+    # A timetable that batches consumes a delivery's events in one run, whichever names it matched.
+    if not batches_events(dag.timetable, condition):
         for name, other in itertools.combinations(names, 2):
             if naming.can_be_offered_together(name, other):
                 problems.append(
-                    f"it schedules on {name!r} | {other!r}, which one delivery can both match, so the "
-                    "Dag would handle that delivery twice: schedule each topic in a Dag of its own"
+                    f"it schedules on {name!r} | {other!r}, which one delivery can both match, and from "
+                    "Airflow 3.4 each of its events starts a run: schedule each topic in a Dag of its own"
                 )
     return problems
 
@@ -112,6 +126,21 @@ def get_partitioned_timetables() -> tuple[type, ...]:
     return (PartitionedAssetTimetable,)
 
 
+def batches_events(timetable: Any, condition: Any) -> bool:
+    """
+    Return whether the timetable consumes the events of one delivery in one run.
+
+    From Airflow 3.4 each event starts its own run, unless the timetable's ``batch_asset_events``
+    says otherwise, which it does for a condition with an ``&`` of several assets, a list included.
+    Before 3.4 every run batches, so the condition alone decides, as it will once Airflow is upgraded.
+    """
+    from airflow.sdk import AssetAll
+
+    if (batch := getattr(timetable, "batch_asset_events", None)) is not None:
+        return bool(batch)
+    return any(isinstance(node, AssetAll) and len(node.objects) > 1 for node in iter_nodes(condition))
+
+
 def get_operands(condition: Any) -> list[Any] | None:
     """Return the operands of an ``&`` or ``|`` condition, or None for an asset, reference or alias."""
     from airflow.sdk import AssetAll, AssetAny
@@ -119,36 +148,13 @@ def get_operands(condition: Any) -> list[Any] | None:
     return list(condition.objects) if isinstance(condition, (AssetAll, AssetAny)) else None
 
 
+def iter_nodes(condition: Any) -> Iterator[Any]:
+    """Yield an asset condition and every condition and asset in it."""
+    yield condition
+    for operand in get_operands(condition) or []:
+        yield from iter_nodes(operand)
+
+
 def iter_assets(condition: Any) -> Iterator[Any]:
     """Yield the assets, references and aliases anywhere in an asset condition."""
-    if (operands := get_operands(condition)) is None:
-        yield condition
-        return
-    for operand in operands:
-        yield from iter_assets(operand)
-
-
-def iter_or_groups(condition: Any) -> Iterator[list[Any]]:
-    """
-    Yield the operands of each ``|`` condition, with those of the ``|`` conditions directly in it.
-
-    An ``&`` condition is no operand of a group but starts groups of its own: a delivery that matches
-    names on both sides of an ``&`` satisfies it once.
-    """
-    from airflow.sdk import AssetAll, AssetAny
-
-    if not isinstance(condition, AssetAny):
-        for operand in get_operands(condition) or []:
-            yield from iter_or_groups(operand)
-        return
-    group = []
-    pending = list(condition.objects)
-    while pending:
-        operand = pending.pop(0)
-        if isinstance(operand, AssetAny):
-            pending[:0] = operand.objects
-        elif isinstance(operand, AssetAll):
-            yield from iter_or_groups(operand)
-        else:
-            group.append(operand)
-    yield group
+    return (node for node in iter_nodes(condition) if get_operands(node) is None)

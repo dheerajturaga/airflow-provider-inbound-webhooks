@@ -102,10 +102,13 @@ def build_config_section() -> dict[str, Any]:
                         f"{DAG_CHECKS_ERROR} refuses to load a Dag that uses a WebhookTopic in a way no "
                         "delivery can serve: in a task's outlets or inlets, in a PartitionedAssetTimetable, "
                         "or in a | condition with another topic that one delivery can also match. Its Dag "
-                        f"file then shows an import error that says why. {DAG_CHECKS_OFF} checks nothing. "
-                        "It is read wherever Dag files are parsed, so set the same value on the Dag "
-                        "processor and the workers. There is no warning mode, because a warning raised "
-                        "while a Dag is checked reaches only the Dag processor's log, never the UI."
+                        "file then shows an import error that says why, and every Dag in that file stops "
+                        "running, not only the refused one, so keep Dags that schedule on topics in files "
+                        f"of their own before turning the checks on. {DAG_CHECKS_OFF} checks nothing, and "
+                        "so does any other value, which is logged as a warning. It is read wherever Dag "
+                        "files are parsed, so set the same value on the Dag processor and the workers. "
+                        "There is no warning mode, because a warning raised while a Dag is checked reaches "
+                        "only the Dag processor's log, never the UI."
                     ),
                     "version_added": "0.2.0",
                     "type": "string",

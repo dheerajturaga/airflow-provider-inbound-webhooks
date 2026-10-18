@@ -101,19 +101,29 @@ def can_be_offered_together(name: str, other: str) -> bool:
 
     - the scopes are offered for one path: both empty, for a delivery without one; the same path; a
       path and that path with ``*`` in place of some of its trailing segments (``my-org/web`` and
-      ``my-org/*`` or ``*``); or two such wildcard paths (``my-org/*`` and ``*``); and
+      ``my-org/*`` or ``*``); or two such wildcard paths (``my-org/*`` and ``*``). A scope holds
+      ``*`` only as its last segment, as every wildcard path does; and
     - one kind is the other or a prefix of it (``push`` and ``push/main``).
 
     That covers a name and its prefix, a name and its wildcard form, and names that differ in both,
     such as ``github/my-org/web/push`` and ``github/*/push/main``: a push to ``main`` of
     ``my-org/web`` offers both.
 
-    Two limits come from comparing names alone. A delivery with several kinds, such as a Jira update
-    that changes a status and adds a label, also offers names of different kinds together, which is
-    not detected: source types that send one kind per delivery never offer such names together, as
-    for GitHub's ``opened`` and ``reopened``. And a segment that holds a ``/``, such as the label
-    ``kind/bug``, is taken as two, so the labels ``kind`` and ``kind/bug`` count as offered together
-    although GitHub offers them for different deliveries.
+    Comparing names alone, without the webhook's source type, has limits:
+
+    - A delivery with several kinds, such as a Jira update that changes a status and adds a label,
+      also offers names of different kinds together, which is not detected: source types that send
+      one kind per delivery never offer such names together, as for GitHub's ``opened`` and
+      ``reopened``.
+    - A segment that holds a ``/``, such as the label ``kind/bug``, is taken as two, so the labels
+      ``kind`` and ``kind/bug`` count as offered together although GitHub offers them for different
+      deliveries.
+    - How many segments a path has is not known, so a kind segment can be read as a path segment:
+      ``github/my-org/*/release`` and ``github/my-org/web/push/release`` count as offered together, as
+      they are for a path of three segments, such as a GitLab project's, although GitHub's paths have
+      two.
+    - A path that holds a literal ``*`` before its last segment, which only a configured source can
+      send, is not read as a scope, so a pair of its names can be missed.
     """
     webhook_name, _, rest = name.partition("/")
     other_webhook_name, _, other_rest = other.partition("/")
@@ -131,6 +141,9 @@ def can_be_offered_together(name: str, other: str) -> bool:
 
 def are_scopes_of_one_path(scope: list[str], other: list[str]) -> bool:
     """Return whether some path offers both scopes, given as segments, as itself or a wildcard path."""
+    # A * before the last segment would read a kind segment after a wildcard as part of the path.
+    if "*" in scope[:-1] or "*" in other[:-1]:
+        return False
     if not scope or not other:
         return scope == other
     # A wildcard path stands for any path that extends what precedes its *.

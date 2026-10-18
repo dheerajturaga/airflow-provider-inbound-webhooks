@@ -143,16 +143,25 @@ name and URI; the keys it yields when iterated over are plain assets.
 
 `policy.py` is a cluster policy, registered under the `airflow.policy` entry point. Airflow loads
 policy entry points as it initializes, when first imported, in every process (`settings.initialize`
-calls `load_policy_plugins` in 3.1 to 3.3), so the module imports only what Airflow has loaded by
-then. `dag_policy` returns at once while the process has not imported `topics.py`, since no Dag can
-then hold a topic, and while `[inbound_webhooks] dag_checks` is `off`. Otherwise it collects every
-problem of the Dag and raises one `AirflowClusterPolicyViolation`, as Airflow's documentation
-recommends.
+calls `load_policy_plugins` in 3.1 to 3.3), and pluggy lets an error raised importing one escape, so
+it would stop every process from starting, checks on or off. Importing the module therefore only
+defines the policy, with `airflow.policies.hookimpl`, or should that move, with pluggy's marker of
+the same name, `HookimplMarker("airflow.policy")`, which is the same marker. Everything else is
+imported when a Dag is checked. `dag_policy` returns at once while the process has not imported
+`topics.py`, since no Dag can then hold a topic, which works because the package imports it only
+when a Dag file asks for `WebhookTopic`; and it returns while `[inbound_webhooks] dag_checks` is
+`off`. Otherwise it collects every problem of the Dag and raises one
+`AirflowClusterPolicyViolation`, as Airflow's documentation recommends.
 
 `DagBag.bag_dag` calls the policy for each Dag of a file once the file is imported: in the Dag
 processor, and when a worker parses the file to run a task. An `AirflowClusterPolicyViolation`
-becomes the file's import error, and only that Dag is left out of the file's Dags. A warning would
-not be seen: Airflow captures a file's warnings only while importing it, before policies run, and
+becomes the file's import error and leaves that Dag out of the bag, but it stops the file's other
+Dags too: after storing them, `_update_import_errors` in `dag_processing/collection.py` marks every
+Dag of a file with an import error as having import errors and as stale (3.1 to 3.3), and stale Dags
+neither run nor count as subscribers. `AirflowClusterPolicySkipDag` would leave the other Dags
+running, but shows no reason, so the policy does not use it. A `DagBag` keeps one import error per
+file, so of several refused Dags in one file, the last reason is the one stored. A warning would not
+be seen at all: Airflow captures a file's warnings only while importing it, before policies run, and
 shows none in the UI. The Dag processor reports no warnings on 3.1, and only those of its Dag
 stability check from 3.2. So there is no warning mode.
 
@@ -160,10 +169,13 @@ The checks find topics in each task's `outlets` and `inlets`, and in the timetab
 `asset_condition`. The timetables the Task SDK builds from `schedule`, and from 3.2 those
 `airflow.sdk` exports, keep the Dag file's `WebhookTopic` objects. From 3.2 a timetable imported from
 `airflow.timetables` instead turns them into serialized assets, so a Dag that uses one is not
-checked. Two topics in one `|` condition, or in `|` conditions directly inside it, are refused when
-`naming.can_be_offered_together` says one delivery can offer both names through one kind; its
-docstring states the rule and its two limits. Topics on either side of an `&` are not compared: one
-delivery that matches both satisfies the `&` once.
+checked. Two topics of a condition are refused when `naming.can_be_offered_together` says one
+delivery can offer both names through one kind, which its docstring states with its limits, and the
+timetable does not batch. From 3.4 each event starts its own run, which is what makes such a Dag run
+twice per delivery, unless the timetable's `batch_asset_events` says otherwise, which it does for a
+condition with an `&` of several assets. A batched run gets the delivery's events once each, and
+runs once. Before 3.4 there is no `batch_asset_events` and every run batches, so the condition
+decides as it will after the upgrade.
 
 ## Airflow internals the plugin uses
 

@@ -55,9 +55,10 @@ breaking change, listed under "Changed event names" with the old and new names.
   parsed, not only on the API server.
 - `[inbound_webhooks] dag_checks`, `off` by default. `error` refuses to load a Dag that has a
   `WebhookTopic` in a task's `outlets` or `inlets`, in a `PartitionedAssetTimetable`, or in a `|`
-  condition with another topic that one delivery can also match, and its Dag file shows an import
-  error that says why. The checks are a cluster policy, which the package registers through the
-  `airflow.policy` entry point.
+  condition with another topic that one delivery can also match. Its Dag file shows an import
+  error that says why, which stops every Dag in that file, so keep Dags that schedule on topics in
+  files of their own before turning the checks on. The checks are a cluster policy, which the
+  package registers through the `airflow.policy` entry point.
 
 ### Changed
 
