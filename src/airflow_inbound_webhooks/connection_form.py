@@ -80,6 +80,17 @@ FIELDS = (
         "such as a service or project name.",
     ),
     FormField(
+        "delivery_id_field",
+        "Delivery ID field",
+        "hmac_json and token_header, optional: dotted path to the ID the service gives each delivery and "
+        "repeats when it retries one, so retries are recognised. Set this or Delivery ID header.",
+    ),
+    FormField(
+        "delivery_id_header",
+        "Delivery ID header",
+        "hmac_json and token_header, optional: header carrying that ID. Set this or Delivery ID field.",
+    ),
+    FormField(
         "store_payload",
         "Stored payload",
         "What asset events and the delivery record keep of each delivery: full, the body as received; "

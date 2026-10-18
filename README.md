@@ -334,6 +334,7 @@ describe its deliveries in the connection.
 | The header, and any text before the signature or secret | `X-Signature: sha256=<hex>` | `signature_header` and `signature_prefix`, or `token_header` and `token_prefix` |
 | Where the event is named | `{"type": "deployed"}` in the body, or a header | `event_field` or `event_header` |
 | Optionally, where a project or service is named | `{"service": "billing"}` | `path_field` |
+| Optionally, the ID it gives each delivery and repeats when it retries one | `{"id": "evt_123"}`, or a header | `delivery_id_field` or `delivery_id_header` |
 
 **In Airflow**
 
@@ -492,6 +493,7 @@ changed.
 | `signature_encoding` | no | `hex` (default) or `base64` |
 | `event_field` or `event_header` | one of them | Dotted path into the JSON body (`data.type`), or a header, naming the event. Prefer `event_field` when the service names the event in both: the signature covers the body but not the headers |
 | `path_field` | no | Dotted path to a value that becomes the path, such as a service or project name |
+| `delivery_id_field` or `delivery_id_header` | no | Dotted path into the JSON body, or a header, holding the ID the service gives each delivery and repeats when it retries one, so that [retries are recognised](#delivery-records). An integer ID is read as text. Prefer `delivery_id_field` when the service sends the ID in both: the signature covers it there, so a captured delivery sent again is answered as a retry too |
 
 ### `token_header`: services that send a secret header
 
@@ -504,6 +506,7 @@ who sent a delivery but not that it was unmodified, so it relies on TLS.
 | `token_prefix` | no | Text before the secret, e.g. `"Bearer "` |
 | `event_field` or `event_header` | one of them | As for `hmac_json` |
 | `path_field` | no | As for `hmac_json` |
+| `delivery_id_field` or `delivery_id_header` | no | As for `hmac_json` |
 
 ### `github`
 
@@ -678,8 +681,9 @@ A retry repeats a delivery's ID and its body. It gets the answer the delivery go
 and `outcome` `duplicate`, and records nothing. A redelivery of a delivery that recorded nothing is
 processed again, so redelivering an event after subscribing to one of its names records it. Only
 senders that send a delivery ID can be recognised this way: GitHub (`X-GitHub-Delivery`), GitLab
-17.4 and later (`Idempotency-Key`) and Jira (`X-Atlassian-Webhook-Identifier`). `hmac_json` and
-`token_header` deliveries, and deliveries with an empty ID, are never taken for retries.
+17.4 and later (`Idempotency-Key`), Jira (`X-Atlassian-Webhook-Identifier`), and `hmac_json` and
+`token_header` services whose connection sets `delivery_id_field` or `delivery_id_header`.
+Deliveries with an empty ID are never taken for retries.
 
 `airflow db migrate` creates and upgrades the table, and `airflow db reset` drops it. On Airflow 3.1
 both need [`external_db_managers`](#compatibility). `airflow db clean` does not remove its rows:
@@ -804,13 +808,15 @@ would fail. A `200` or `202` answer has these fields:
   `store_payload` set to `none` keeps no payload at all.
 - **Retries are recognised, replays are not.** A delivery sent again with the same delivery ID is
   answered as before and records nothing, which covers a service's own retries. A captured delivery
-  sent again with another ID is recorded as new: GitHub's delivery ID is a header its signature
-  does not cover, and GitLab sends a token rather than a signature. Because a retry must repeat the
-  body too, a captured body sent under another delivery's ID cannot take that delivery's place.
-  Other headers outside the signature can be changed too.
-  Where the event name comes from such a header, as GitHub's `X-GitHub-Event` or an `event_header`
-  does, a replayed body can be given another event's name. Signatures over a timestamp would allow
-  rejecting old deliveries; see [docs/design.md](docs/design.md).
+  sent again with another ID is recorded as new: GitHub's delivery ID is a header its signature does
+  not cover, and GitLab sends a token rather than a signature. Only an `hmac_json` service whose
+  delivery ID is in the body (`delivery_id_field`) has it signed, so a captured delivery sent again
+  is answered as a retry while its record is kept. Because a retry must repeat the body too, a
+  captured body sent under another delivery's ID cannot take that delivery's place. Other headers
+  outside the signature can be changed too. Where the event name comes from such a header, as
+  GitHub's `X-GitHub-Event` or an `event_header` does, a replayed body can be given another event's
+  name. Signatures over a timestamp would allow rejecting old deliveries; see
+  [docs/design.md](docs/design.md).
 - Bodies larger than `max_body_bytes` are refused before verification.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
@@ -850,7 +856,8 @@ response's `detail` or in the API server log, nor the deliveries page and API.
 
 ## Limitations
 
-- No replay protection: retries are recognised by their delivery ID, deliberate replays are not.
+- No replay protection: retries are recognised by their delivery ID, deliberate replays are not,
+  except for `hmac_json` services whose delivery ID is in the body.
 - Each recorded asset event stores the delivery's payload, unless `store_payload` says otherwise,
   and anyone who can read asset events can see it.
 - Delivery records are only deleted by `airflow webhooks clean`, which needs to be scheduled.

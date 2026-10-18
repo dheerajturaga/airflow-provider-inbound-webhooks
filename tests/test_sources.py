@@ -409,6 +409,15 @@ class TestHmacJsonSource:
                 },
                 id="unknown-encoding",
             ),
+            pytest.param(
+                {
+                    "signature_header": "X-Signature",
+                    "event_field": "type",
+                    "delivery_id_field": "id",
+                    "delivery_id_header": "X-Delivery",
+                },
+                id="both-delivery-id-sources",
+            ),
         ],
     )
     def test_from_extra_rejects(self, extra):
@@ -417,12 +426,36 @@ class TestHmacJsonSource:
 
     @pytest.mark.parametrize(
         "payload",
-        [{"data": {}}, {"data": {"type": "deployed"}, "service": 1}],
-        ids=["no-event", "non-string-path"],
+        [
+            {"data": {}},
+            {"data": {"type": "deployed"}, "service": 1},
+            {"data": {"type": "deployed"}, "id": {"value": "d-1"}},
+            {"data": {"type": "deployed"}, "id": True},
+        ],
+        ids=["no-event", "non-string-path", "object-delivery-id", "boolean-delivery-id"],
     )
     def test_parse_rejects(self, payload):
+        source = HmacJsonSource.from_extra({**self.EXTRA, "delivery_id_field": "id"})
+
         with pytest.raises(ValueError, match="event name|not a string"):
-            parse_json(HmacJsonSource.from_extra(self.EXTRA), payload)
+            parse_json(source, payload)
+
+    @pytest.mark.parametrize(
+        ("options", "payload", "headers", "expected"),
+        [
+            pytest.param({}, {"id": "d-1"}, {"X-Delivery": "h-1"}, None, id="not-configured"),
+            pytest.param({"delivery_id_header": "X-Delivery"}, {}, {"X-Delivery": "h-1"}, "h-1", id="header"),
+            pytest.param({"delivery_id_field": "meta.id"}, {"meta": {"id": "d-1"}}, {}, "d-1", id="field"),
+            pytest.param({"delivery_id_field": "meta.id"}, {"meta": {"id": 42}}, {}, "42", id="numbered"),
+            pytest.param({"delivery_id_field": "meta.id"}, {}, {}, None, id="missing"),
+        ],
+    )
+    def test_delivery_id(self, options, payload, headers, expected):
+        source = HmacJsonSource.from_extra({**self.EXTRA, **options})
+
+        parsed = parse_json(source, {"data": {"type": "deployed"}, **payload}, **headers)
+
+        assert parsed.delivery_id == expected
 
 
 class TestTokenHeaderSource:
@@ -435,7 +468,14 @@ class TestTokenHeaderSource:
         source.verify(headers, BODY, SECRET)
         parsed = parse_json(source, {"event_type": "monitor_alert"})
 
-        assert (parsed.path, parsed.kinds) == (None, [("monitor_alert",)])
+        assert (parsed.path, parsed.kinds, parsed.delivery_id) == (None, [("monitor_alert",)], None)
+
+    def test_delivery_id_from_header(self):
+        source = TokenHeaderSource.from_extra({**self.EXTRA, "delivery_id_header": "X-Request-Id"})
+
+        parsed = parse_json(source, {"event_type": "monitor_alert"}, **{"X-Request-Id": "r-1"})
+
+        assert parsed.delivery_id == "r-1"
 
     @pytest.mark.parametrize(
         "headers",
