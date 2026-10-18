@@ -17,9 +17,12 @@ WEBHOOK_NAMES = "webhook_names"
 CONNECTION_CACHE_TTL = "connection_cache_ttl"
 RATE_LIMIT_PER_MINUTE = "rate_limit_per_minute"
 DELIVERY_RETENTION = "delivery_retention"
+MAX_EVENT_PAYLOAD_BYTES = "max_event_payload_bytes"
 ANY_WEBHOOK_NAME = "*"
 DEFAULT_CONNECTION_CACHE_TTL = 60
 DEFAULT_DELIVERY_RETENTION_DAYS = 7
+# No limit, so Dags keep receiving the payloads they read; AIP-125 proposes 65536 for Airflow.
+DEFAULT_MAX_EVENT_PAYLOAD_BYTES = 0
 
 
 def build_config_section() -> dict[str, Any]:
@@ -76,6 +79,20 @@ def build_config_section() -> dict[str, Any]:
                     "type": "integer",
                     "example": "30",
                     "default": str(DEFAULT_DELIVERY_RETENTION_DAYS),
+                },
+                MAX_EVENT_PAYLOAD_BYTES: {
+                    "description": (
+                        "Bytes of the largest payload copied into a delivery's asset events, measured as "
+                        "compact JSON in UTF-8 after store_payload, so for jira the summary is measured. A "
+                        "larger payload is left out: the events have payload null and payload_truncated "
+                        "true. The delivery record keeps the payload, which the deliveries page and API "
+                        "show until airflow webhooks clean deletes the record after delivery_retention. 0 "
+                        "copies every payload. AIP-125 proposes 65536 as Airflow's default."
+                    ),
+                    "version_added": "0.2.0",
+                    "type": "integer",
+                    "example": "65536",
+                    "default": str(DEFAULT_MAX_EVENT_PAYLOAD_BYTES),
                 },
             },
         }

@@ -6,6 +6,7 @@ import re
 import runpy
 import textwrap
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from airflow.sdk import Asset
@@ -19,6 +20,27 @@ def test_example_dag_file_builds_its_dags(path):
     module_globals = runpy.run_path(str(path))
 
     assert any(isinstance(value, Asset) for value in module_globals.values())
+
+
+def build_event(timestamp: int, payload: dict | None) -> mock.Mock:
+    """Return an asset event as a task receives it, with its payload, or left out if it is None."""
+    return mock.Mock(timestamp=timestamp, extra={"payload": payload, "payload_truncated": payload is None})
+
+
+@pytest.mark.parametrize(
+    ("file_name", "read_payloads", "payload", "expected"),
+    [
+        pytest.param("ci_cd.py", "get_payloads", {"after": "abc123"}, {"after": "abc123"}, id="ci_cd"),
+        pytest.param(
+            "jira_issues.py", "get_issues", {"issue": {"key": "OPS-1"}}, {"key": "OPS-1"}, id="jira"
+        ),
+    ],
+)
+def test_example_dags_skip_payloads_left_out_of_their_events(file_name, read_payloads, payload, expected):
+    module_globals = runpy.run_path(str(ROOT / "examples" / "dags" / file_name))
+    triggering_asset_events = {"asset": [build_event(2, payload), build_event(1, None)]}
+
+    assert module_globals[read_payloads](triggering_asset_events, "asset") == [expected]
 
 
 def test_readme_quick_start_writes_the_example_dag():

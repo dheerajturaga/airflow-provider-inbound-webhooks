@@ -101,6 +101,28 @@ def get_webhooks_cli_commands() -> list[GroupCommand]:
     ]
 
 
+def find_options_that_are_not_integers() -> list[str]:
+    """
+    Describe each integer option of the section whose value is not an integer.
+
+    While one the endpoint reads does not parse, every delivery that reads it fails with a 500, and
+    while ``delivery_retention`` does not, ``clean`` fails.
+    """
+    from airflow.exceptions import AirflowConfigException
+
+    problems = []
+    for option, details in configuration.build_config_section()[configuration.SECTION]["options"].items():
+        if details["type"] != "integer":
+            continue
+        try:
+            # With the default: where Airflow has not loaded the provider's options, an unset one has none.
+            conf.getint(configuration.SECTION, option, fallback=int(details["default"]))
+        except AirflowConfigException:
+            value = conf.get(configuration.SECTION, option)
+            problems.append(f"[{configuration.SECTION}] {option} is {value!r}, which is not an integer")
+    return problems
+
+
 def check(args: argparse.Namespace) -> None:
     """Report how deliveries to a webhook would be served, and exit with 1 if they would fail."""
     from airflow.exceptions import AirflowNotFoundException
@@ -126,6 +148,7 @@ def check(args: argparse.Namespace) -> None:
             f"[{configuration.SECTION}] {configuration.WEBHOOK_NAMES} does not list {args.name}, so its "
             "deliveries are answered with 404"
         )
+    problems.extend(find_options_that_are_not_integers())
     conn_id = f"{CONN_ID_PREFIX}{args.name}"
     conn = webhook = None
     try:

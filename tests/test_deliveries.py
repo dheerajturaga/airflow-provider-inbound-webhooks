@@ -168,8 +168,8 @@ def test_one_delivery_comes_with_its_payload(client, add_delivery):
     assert client.get(f"/_deliveries/gitlab/{delivery}").status_code == 404
 
 
-def test_asset_event_finds_its_delivery_by_its_inbound_delivery_id(client, session, subscribe):
-    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+def post_labeled(client: TestClient) -> None:
+    """Deliver LABELED to the github webhook, signed with its connection's secret."""
     body = json.dumps(LABELED).encode()
     headers = {
         "content-type": "application/json",
@@ -181,10 +181,26 @@ def test_asset_event_finds_its_delivery_by_its_inbound_delivery_id(client, sessi
     with mock.patch.dict(app.resolved_webhooks):
         assert client.post("/github", content=body, headers=headers).status_code == 202
 
+
+def test_asset_event_finds_its_delivery_by_its_inbound_delivery_id(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    post_labeled(client)
+
     (extra,) = session.scalars(select(AssetEvent.extra))
     delivery = client.get(f"/_deliveries/github/{extra['inbound_delivery_id']}").json()
 
     assert (delivery["delivery_id"], delivery["payload"]) == ("delivery-1", LABELED)
+
+
+@mock.patch.dict(os.environ, {"AIRFLOW__INBOUND_WEBHOOKS__MAX_EVENT_PAYLOAD_BYTES": "1"})
+def test_payload_left_out_of_an_asset_event_is_found_with_its_delivery(client, session, subscribe):
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    post_labeled(client)
+
+    (extra,) = session.scalars(select(AssetEvent.extra))
+    delivery = client.get(f"/_deliveries/github/{extra['inbound_delivery_id']}").json()
+
+    assert (extra["payload"], extra["payload_truncated"], delivery["payload"]) == (None, True, LABELED)
 
 
 @mock.patch.dict(os.environ, {"AIRFLOW__INBOUND_WEBHOOKS__WEBHOOK_NAMES": "github,gitlab"})

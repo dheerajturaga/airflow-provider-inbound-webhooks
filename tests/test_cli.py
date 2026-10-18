@@ -93,6 +93,22 @@ def test_check_fails_on_each_problem(capsys, env, expected_problem):
     assert expected_problem in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "option",
+    ["connection_cache_ttl", "rate_limit_per_minute", "delivery_retention", "max_event_payload_bytes"],
+)
+@pytest.mark.parametrize("value", ["64k", "1.5", ""])
+def test_check_fails_on_an_integer_option_that_does_not_parse(capsys, option, value):
+    # Deliveries that read such an option fail with a 500, and airflow webhooks clean reads the retention.
+    env = {**GITHUB_CONN, f"AIRFLOW__INBOUND_WEBHOOKS__{option.upper()}": value}
+
+    with mock.patch.dict(os.environ, env), pytest.raises(SystemExit) as exit_info:
+        cli.main(["check", "github"])
+
+    assert exit_info.value.code == 1
+    assert f"[inbound_webhooks] {option} is {value!r}, which is not an integer" in capsys.readouterr().err
+
+
 def test_check_refuses_names_no_webhook_can_have():
     with pytest.raises(SystemExit, match="cannot be a webhook name"):
         cli.main(["check", "GitHub"])
