@@ -55,6 +55,7 @@ The tests are organised as:
 |---|---|
 | `tests/test_sources.py` | Verification and parsing of each source type |
 | `tests/test_naming.py` | The event naming rule |
+| `tests/test_name_stability.py` | That deliveries posted to the endpoint keep the names `tests/candidate_names.json` records for them, and that the names the README and the example Dags use are offered |
 | `tests/test_app.py` | The endpoint, in process: routing, responses, connection handling |
 | `tests/test_api_server.py` | The real `airflow api-server` with the installed plugin, over HTTP, including the README quick start |
 | `tests/test_plugin.py` | That importing the plugin, which every Airflow process does, leaves the endpoint's Airflow internals unimported |
@@ -126,7 +127,10 @@ lookup and recording, is shared. Source types live in `src/airflow_inbound_webho
    `src/airflow_inbound_webhooks/connection_form.py`.
 3. Add tests in `tests/test_sources.py` for verification (valid, missing, wrong) and parsing, and an
    end-to-end case in `tests/test_app.py`. Add a delivery carrying every field `parse()` reads to
-   `FULL_DELIVERIES`, which checks that a delivery of any shape is named or refused.
+   `FULL_DELIVERIES`, which checks that a delivery of any shape is named or refused. Add deliveries
+   of the events it names, as the service sends them, to `DELIVERIES` in
+   `tests/test_name_stability.py`, with their webhook's connection in `CONNECTIONS` and the headers
+   that authenticate them in `sign()`; then record their names, as below.
 4. Document it under "Source types" in the README.
 
 Use the service's own event and action names, so its webhook documentation stays the reference for
@@ -137,6 +141,26 @@ existing delivery produces is a breaking change; see "Stability" under "Event na
 Adding a kind or a detail is not, because the shorter names are still offered. The connection
 options a source type reads, and the fields a summary keeps, are public interfaces too; see
 "Versioning" in the README.
+
+`tests/test_name_stability.py` posts its deliveries to the endpoint, and fails when the names a
+delivery's record keeps are not those `tests/candidate_names.json` records for it. Once a change to
+them is deliberate, record them again, and review the changes before committing them:
+
+```bash
+INBOUND_WEBHOOKS_RECORD_NAMES=1 .venv/bin/pytest tests/test_name_stability.py
+git diff tests/candidate_names.json
+```
+
+The same module checks the names the README and the example Dags use against those deliveries, so
+each webhook the README sets up, with a connection or a URL, needs deliveries there:
+
+- A `text` block of names in the README, with a name at the start of each line and two spaces or
+  more before what it means, lists all the names one delivery offers, in the order it offers them.
+  A block of one name shows just that name.
+- Every other name must be one that a delivery offers: in the example Dags, every asset a file
+  defines; in the README, every asset its Python builds, in code blocks and between backticks, and
+  every name between backticks, where `gitlab/platform/*/...` stands for the names that start with
+  `gitlab/platform/*/`. To build assets in the README some other way, add it to `README_NAMESPACE`.
 
 ## Changing the delivery table
 
