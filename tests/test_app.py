@@ -15,16 +15,16 @@ from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
+from airflow import settings
 from airflow.assets.manager import AssetManager
 from airflow.models.asset import AssetDagRunQueue, AssetEvent
 from airflow.models.connection import Connection as ConnectionModel
 from airflow.models.dag import DagModel
 from airflow.models.log import Log
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select, update
+from sqlalchemy import event, func, select, update
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.dml import Insert
 
 from airflow_inbound_webhooks import app
 from airflow_inbound_webhooks.app import build_app, get_asset_change_arguments
@@ -1195,23 +1195,44 @@ def test_recorded_delivery_is_written_to_the_audit_log(client, session, subscrib
 @mock.patch.dict(os.environ, GITHUB_CONN)
 def test_audit_entry_rolls_back_with_its_delivery(client, session, subscribe):
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
-    execute = Session.execute
-    # What the transaction holds when it fails: only once it holds both is their rollback tested.
+    # What the transaction holds when it fails: only once it holds all three is their rollback tested.
     written = []
 
-    def fail_to_insert_the_delivery(self, statement, *args, **kwargs):
-        if isinstance(statement, Insert) and statement.table is delivery_table:
-            # Flushed, so the audit entry is in the database rather than only in the session.
-            self.flush()
-            written.append((count_asset_events(self), len(get_audit_log(self))))
-            raise OperationalError("INSERT", {}, Exception("database is locked"))
-        return execute(self, statement, *args, **kwargs)
+    def fail_to_commit(self):
+        # Flushed first, as a commit is, so whatever order they are added in, all are in the database.
+        self.flush()
+        written.append((count_asset_events(self), len(get_audit_log(self)), len(get_deliveries(self))))
+        raise OperationalError("COMMIT", {}, Exception("database is locked"))
 
-    with mock.patch.object(Session, "execute", fail_to_insert_the_delivery):
+    with mock.patch.object(Session, "commit", fail_to_commit):
         response = post_github(client)
 
     assert (response.status_code, response.headers["Retry-After"]) == (503, "30")
-    assert written == [(1, 1)]
+    assert written == [(1, 1, 1)]
+    assert get_audit_log(session) == []
+    assert count_asset_events(session) == 0
+    assert get_queued_dag_ids(session) == set()
+    assert get_deliveries(session) == []
+
+
+@mock.patch.dict(os.environ, GITHUB_CONN)
+def test_delivery_whose_audit_entry_cannot_be_written_records_nothing(client, session, subscribe):
+    # A recorded delivery always has its audit entry, so the entry cannot be left out to save the rest.
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    failed = []
+
+    def fail_to_write_the_audit_entry(connection, cursor, statement, parameters, context, executemany):
+        if statement.startswith(f"INSERT INTO {Log.__tablename__} "):
+            failed.append(statement)
+            raise OperationalError(statement, parameters, Exception("database is locked"))
+
+    event.listen(settings.engine, "before_cursor_execute", fail_to_write_the_audit_entry)
+    try:
+        response = post_github(client)
+    finally:
+        event.remove(settings.engine, "before_cursor_execute", fail_to_write_the_audit_entry)
+
+    assert (len(failed), response.status_code, response.headers["Retry-After"]) == (1, 503, "30")
     assert get_audit_log(session) == []
     assert count_asset_events(session) == 0
     assert get_queued_dag_ids(session) == set()
