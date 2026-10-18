@@ -49,13 +49,13 @@ def build_config_env(**options: str) -> dict[str, str]:
 
 GITHUB_CONN = build_conn_env("github", max_body_bytes=4096)
 GITLAB_CONN = build_conn_env("gitlab")
-DEPLOYBOT_CONN = build_conn_env(
-    "deploybot",
-    source_type="hmac_json",
-    signature_header="X-Signature",
-    event_field="event",
-    path_field="service",
-)
+DEPLOYBOT_EXTRA = {
+    "source_type": "hmac_json",
+    "signature_header": "X-Signature",
+    "event_field": "event",
+    "path_field": "service",
+}
+DEPLOYBOT_CONN = build_conn_env("deploybot", **DEPLOYBOT_EXTRA)
 LABELED = {
     "action": "labeled",
     "label": {"name": "deploy-preview"},
@@ -539,6 +539,20 @@ def test_delivery_is_recorded_with_what_arrived(client, session, subscribe):
         "payload": LABELED,
     }
     assert delivery.received_at.tzinfo is not None
+
+
+@mock.patch.dict(os.environ, build_conn_env("deploybot", **DEPLOYBOT_EXTRA, delivery_id_field="id"))
+def test_generic_source_recognises_retries_by_the_delivery_id_it_is_configured_with(
+    client, session, subscribe
+):
+    subscribe("smoke_test_billing", "deploybot/billing/deployed")
+    payload = {"id": "evt-1", "event": "deployed", "service": "billing"}
+
+    first, retry = post_deploybot(client, payload), post_deploybot(client, payload)
+
+    assert (first.status_code, retry.status_code) == (202, 200)
+    assert (first.json()["delivery_id"], retry.json()["outcome"]) == ("evt-1", "duplicate")
+    assert count_asset_events(session) == 1
 
 
 @mock.patch.dict(os.environ, GITHUB_CONN)

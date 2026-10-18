@@ -136,9 +136,11 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
    delivery table recognises a retry by the sender's delivery ID and the body's digest, which only
    catches a service's own retries: GitHub's `X-GitHub-Delivery` and GitLab's `Idempotency-Key` are
    headers no signature covers, so a deliberate replay can change them, and the event headers along
-   with them. Source types whose signature covers a timestamp could reject old deliveries. Jira's
-   does, through the `timestamp` in the signed body, but Jira Cloud retries a failed delivery for
-   more than an hour, so the window would have to be as long.
+   with them. An `hmac_json` connection that reads the delivery ID from the body
+   (`delivery_id_field`) has it signed, so a replay of one of its deliveries is answered as a retry
+   while its row is kept. Source types whose signature covers a timestamp could reject old
+   deliveries. Jira's does, through the `timestamp` in the signed body, but Jira Cloud retries a
+   failed delivery for more than an hour, so the window would have to be as long.
 2. **Probing webhook names.** `webhook_names` and the connection cache bound what unauthenticated
    requests cost: an unlisted name is refused before any lookup, and each API server worker reads a
    listed webhook's connection at most twice per `connection_cache_ttl`: when its cache entry

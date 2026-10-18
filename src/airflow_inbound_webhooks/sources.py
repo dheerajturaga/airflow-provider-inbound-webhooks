@@ -322,18 +322,25 @@ class ConfiguredJsonSource(WebhookSource):
     Base for services configured entirely from the connection extra.
 
     The event name comes from ``event_header`` or ``event_field``, the optional path from
-    ``path_field``. Fields are dotted paths into the payload (``data.type``).
+    ``path_field``, and the optional delivery ID from ``delivery_id_header`` or ``delivery_id_field``.
+    Fields are dotted paths into the payload (``data.type``).
     """
 
     event_field: str | None = None
     event_header: str | None = None
     path_field: str | None = None
+    delivery_id_field: str | None = None
+    delivery_id_header: str | None = None
 
     @staticmethod
-    def read_event_options(source_type: str, extra: dict[str, Any]) -> dict[str, str | None]:
+    def read_delivery_options(source_type: str, extra: dict[str, Any]) -> dict[str, str | None]:
+        """Read the options that say where a delivery names its event, path and ID."""
         if ("event_field" in extra) == ("event_header" in extra):
             raise ValueError(f"{source_type} needs exactly one of event_field or event_header")
-        return {key: extra.get(key) for key in ("event_field", "event_header", "path_field")}
+        if "delivery_id_field" in extra and "delivery_id_header" in extra:
+            raise ValueError(f"{source_type} takes at most one of delivery_id_field or delivery_id_header")
+        keys = ("event_field", "event_header", "path_field", "delivery_id_field", "delivery_id_header")
+        return {key: extra.get(key) for key in keys}
 
     def parse(self, headers: Headers, body: bytes) -> WebhookEvent:
         payload = load_json_object(headers, body)
@@ -346,7 +353,25 @@ class ConfiguredJsonSource(WebhookSource):
         path = get_field(payload, self.path_field) if self.path_field else None
         if path is not None and not isinstance(path, str):
             raise ValueError(f"{self.path_field!r} is not a string")
-        return WebhookEvent(path=path or None, kinds=[(event,)], delivery_id=None, payload=payload)
+        return WebhookEvent(
+            path=path or None,
+            kinds=[(event,)],
+            delivery_id=self.read_delivery_id(headers, payload),
+            payload=payload,
+        )
+
+    def read_delivery_id(self, headers: Headers, payload: dict[str, Any]) -> str | None:
+        if self.delivery_id_header:
+            return headers.get(self.delivery_id_header)
+        if not self.delivery_id_field:
+            return None
+        delivery_id = get_field(payload, self.delivery_id_field)
+        # Some services number their deliveries.
+        if isinstance(delivery_id, int) and not isinstance(delivery_id, bool):
+            return str(delivery_id)
+        if delivery_id is not None and not isinstance(delivery_id, str):
+            raise ValueError(f"{self.delivery_id_field!r} is not a string or an integer")
+        return delivery_id
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -377,7 +402,7 @@ class HmacJsonSource(ConfiguredJsonSource):
             signature_header=extra["signature_header"],
             signature_prefix=extra.get("signature_prefix", ""),
             signature_encoding=encoding,
-            **cls.read_event_options("hmac_json", extra),
+            **cls.read_delivery_options("hmac_json", extra),
         )
 
     def verify(self, headers: Headers, body: bytes, secret: str) -> None:
@@ -415,7 +440,7 @@ class TokenHeaderSource(ConfiguredJsonSource):
         return cls(
             token_header=extra["token_header"],
             token_prefix=extra.get("token_prefix", ""),
-            **cls.read_event_options("token_header", extra),
+            **cls.read_delivery_options("token_header", extra),
         )
 
     def verify(self, headers: Headers, body: bytes, secret: str) -> None:

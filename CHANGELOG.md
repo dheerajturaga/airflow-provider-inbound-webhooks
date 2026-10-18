@@ -28,6 +28,8 @@ breaking change, listed under "Changed event names" with the old and new names.
   `GET /webhooks/_deliveries/<name>`. Both need an Airflow login and permission to read the
   webhook's connection.
 - `GET /webhooks/_health`, answered without a login.
+- `delivery_id_field` and `delivery_id_header` for `hmac_json` and `token_header`: where the service
+  puts the ID it gives each delivery, so that its retries are recognised too.
 - `airflow webhooks check`, `deliveries`, `clean` and `send-test`, on Airflow 3.2 and later, and as
   `python -m airflow_inbound_webhooks.cli` on 3.1. `clean` deletes delivery records older than the
   new `[inbound_webhooks] delivery_retention`, 7 days by default.
