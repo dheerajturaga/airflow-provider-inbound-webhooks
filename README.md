@@ -647,6 +647,38 @@ things:
   file it parsed last, so a name declared as `Asset` in one file and as `WebhookTopic` in another
   switches between `asset` and `webhook`.
 
+Iterate over all events rather than taking the first: before Airflow 3.4, and on any Dag with
+`batch_asset_events`, deliveries that arrive before the scheduler creates a run share that run.
+Events are not ordered; sort by `event.timestamp` if order matters.
+
+Besides `payload`, `extra` holds:
+
+| Key | Value |
+|---|---|
+| `from_webhook` | `true` |
+| `webhook` | The webhook's name, as in `/webhooks/<name>`; `source` holds it too |
+| `source_type` | The connection's source type, such as `github` |
+| `path` | Where the event happened, as in its names, up to 1500 characters |
+| `delivery_id` | The service's ID for the delivery, where it sends one |
+| `inbound_delivery_id` | The ID of the delivery's [record](#delivery-records), set even when the service sends no delivery ID. While the record is kept (`delivery_retention`), the deliveries page and API find it by this ID, for Airflow users allowed to read the webhook's connection, which a task is not; see [Reading deliveries](#reading-deliveries) |
+| `correlation_key` | `null`: no source type sets one yet |
+| `payload_truncated` | `true` if the payload was larger than `max_event_payload_bytes` and left out, so `payload` is `null`; otherwise `false` |
+
+When `payload_truncated` is `true`, fetch what the Dag needs from the service instead, such as the
+pull request from GitHub's API. The delivery record keeps the payload only until
+`airflow webhooks clean` deletes it after `delivery_retention` days, and shows it only to Airflow
+users allowed to read the webhook's connection, which a task is not.
+
+Anyone allowed to create asset events, through the REST API or the UI, can create one with the same
+keys, so `from_webhook` says where an event claims to come from, not that a service sent it. Read the
+payload defensively. Anyone who can read asset events can read the payload too; see
+[Security](#security).
+
+More examples, for GitHub labels and pushes, organization-wide releases and GitLab pipelines, are in
+[`examples/dags/ci_cd.py`](examples/dags/ci_cd.py), for Jira transitions and new issues in
+[`examples/dags/jira_issues.py`](examples/dags/jira_issues.py), and for both forms of
+`WebhookTopic` in [`examples/dags/webhook_topics.py`](examples/dags/webhook_topics.py).
+
 **Checks:** with [`dag_checks`](#configuration) set to `error` where Dag files are parsed, Airflow
 refuses to load a Dag that uses a `WebhookTopic` in a way no delivery can serve:
 
@@ -687,38 +719,6 @@ Installing the package registers the checks as an Airflow cluster policy in ever
 while `dag_checks` is `off`, the default, they return at once. Any value but `off` and `error`
 checks nothing either, and is logged as a warning once per process. There is no warning mode,
 because a warning that a cluster policy raises reaches only the Dag processor's log, never the UI.
-
-Iterate over all events rather than taking the first: before Airflow 3.4, and on any Dag with
-`batch_asset_events`, deliveries that arrive before the scheduler creates a run share that run.
-Events are not ordered; sort by `event.timestamp` if order matters.
-
-Besides `payload`, `extra` holds:
-
-| Key | Value |
-|---|---|
-| `from_webhook` | `true` |
-| `webhook` | The webhook's name, as in `/webhooks/<name>`; `source` holds it too |
-| `source_type` | The connection's source type, such as `github` |
-| `path` | Where the event happened, as in its names, up to 1500 characters |
-| `delivery_id` | The service's ID for the delivery, where it sends one |
-| `inbound_delivery_id` | The ID of the delivery's [record](#delivery-records), set even when the service sends no delivery ID. While the record is kept (`delivery_retention`), the deliveries page and API find it by this ID, for Airflow users allowed to read the webhook's connection, which a task is not; see [Reading deliveries](#reading-deliveries) |
-| `correlation_key` | `null`: no source type sets one yet |
-| `payload_truncated` | `true` if the payload was larger than `max_event_payload_bytes` and left out, so `payload` is `null`; otherwise `false` |
-
-When `payload_truncated` is `true`, fetch what the Dag needs from the service instead, such as the
-pull request from GitHub's API. The delivery record keeps the payload only until
-`airflow webhooks clean` deletes it after `delivery_retention` days, and shows it only to Airflow
-users allowed to read the webhook's connection, which a task is not.
-
-Anyone allowed to create asset events, through the REST API or the UI, can create one with the same
-keys, so `from_webhook` says where an event claims to come from, not that a service sent it. Read the
-payload defensively. Anyone who can read asset events can read the payload too; see
-[Security](#security).
-
-More examples, for GitHub labels and pushes, organization-wide releases and GitLab pipelines, are in
-[`examples/dags/ci_cd.py`](examples/dags/ci_cd.py), for Jira transitions and new issues in
-[`examples/dags/jira_issues.py`](examples/dags/jira_issues.py), and for both forms of
-`WebhookTopic` in [`examples/dags/webhook_topics.py`](examples/dags/webhook_topics.py).
 
 ## Reference
 
