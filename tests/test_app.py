@@ -38,8 +38,8 @@ pytestmark = pytest.mark.usefixtures("clean_db")
 SECRET = "s3cret"
 
 
-def build_conn_env(name: str, **extra) -> dict[str, str]:
-    conn = {"conn_type": "generic", "password": SECRET, "extra": extra}
+def build_conn_env(name: str, *, password: str = SECRET, **extra) -> dict[str, str]:
+    conn = {"conn_type": "generic", "password": password, "extra": extra}
     return {f"AIRFLOW_CONN_WEBHOOK_{name.upper()}": json.dumps(conn)}
 
 
@@ -131,6 +131,7 @@ def client():
 def forget_process_state() -> None:
     app.resolved_webhooks.clear()
     app.resolve_locks.clear()
+    app.rereads_allowed_at.clear()
     app.warn_no_webhook_names.cache_clear()
     app.warn_any_webhook_name.cache_clear()
     app.rate_limit_buckets.clear()
@@ -995,14 +996,78 @@ def test_serving_any_webhook_name_is_deprecated(client, caplog):
 def test_connection_is_read_once_per_cache_ttl(client, connection_lookups):
     with mock.patch("airflow_inbound_webhooks.app.time") as mock_time:
         mock_time.monotonic.return_value = 1000.0
-        # A failed verification must not read the connection again, or it would not bound the cost.
-        statuses = [post_github(client, secret=secret).status_code for secret in (SECRET, "wrong", SECRET)]
+        statuses = [post_github(client).status_code for _ in range(2)]
         assert connection_lookups.call_count == 1
 
         mock_time.monotonic.return_value = 1060.0
         statuses.append(post_github(client).status_code)
 
-    assert statuses == [202, 401, 202, 202]
+    assert statuses == [202, 202, 202]
+    assert connection_lookups.call_count == 2
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="github")})
+def test_failed_verifications_read_the_connection_again_once_per_cache_ttl(client, connection_lookups):
+    with mock.patch("airflow_inbound_webhooks.app.time") as mock_time:
+        mock_time.monotonic.return_value = 1000.0
+        statuses = [post_github(client, secret=secret).status_code for secret in (SECRET, "wrong", "wrong")]
+        # Once, however many fail: anyone can send a delivery that fails verification.
+        assert connection_lookups.call_count == 2
+
+        mock_time.monotonic.return_value = 1059.0
+        statuses.append(post_github(client, secret="wrong").status_code)
+        assert connection_lookups.call_count == 2
+
+        mock_time.monotonic.return_value = 1100.0
+        statuses.append(post_github(client).status_code)
+        statuses.append(post_github(client, secret="wrong").status_code)
+
+    assert statuses == [202, 401, 401, 401, 202, 401]
+    # At 1100 the cache has expired, and a minute has passed since the connection was last read again.
+    assert connection_lookups.call_count == 4
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="github")})
+def test_changed_secret_applies_to_the_first_delivery_signed_with_it(client, connection_lookups):
+    assert post_github(client, delivery_id="before").status_code == 202
+
+    with mock.patch.dict(os.environ, build_conn_env("github", password="rotated", max_body_bytes=4096)):
+        statuses = [
+            post_github(client, secret=secret, delivery_id=f"after-{secret}").status_code
+            for secret in ("rotated", SECRET)
+        ]
+
+    assert statuses == [202, 401]
+    assert connection_lookups.call_count == 2
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="github")})
+def test_reading_the_connection_again_does_not_keep_it_cached_for_longer(client, connection_lookups):
+    with mock.patch("airflow_inbound_webhooks.app.time") as mock_time:
+        mock_time.monotonic.return_value = 1000.0
+        assert post_github(client).status_code == 202
+        # The service has its new secret before the connection does, so reading it again finds the old.
+        mock_time.monotonic.return_value = 1030.0
+        assert post_github(client, secret="rotated").status_code == 401
+
+        with mock.patch.dict(os.environ, build_conn_env("github", password="rotated", max_body_bytes=4096)):
+            mock_time.monotonic.return_value = 1059.0
+            assert post_github(client, secret="rotated").status_code == 401
+            # The connection read at 1000 expires at 1060, as it would have without the second read.
+            mock_time.monotonic.return_value = 1060.0
+            assert post_github(client, secret="rotated").status_code == 202
+
+    assert connection_lookups.call_count == 3
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="github")})
+def test_failed_verification_uses_a_connection_read_since_without_reading_it_again(connection_lookups):
+    cached = app.get_configured_webhook("github")
+    # As when another delivery had the connection read again while this one was being verified.
+    newer = app.resolve_webhook("github")
+    app.resolved_webhooks["github"] = (app.resolved_webhooks["github"][0], newer)
+
+    assert app.reread_webhook(cached) is newer
     assert connection_lookups.call_count == 2
 
 
@@ -1054,9 +1119,10 @@ def test_failed_lookup_is_cached(client, connection_lookups, conn_env, expected_
 )
 def test_connection_is_read_on_every_delivery(client, connection_lookups, config):
     with mock.patch.dict(os.environ, build_config_env(**config)):
-        statuses = [post_github(client).status_code for _ in range(2)]
+        statuses = [post_github(client, secret=secret).status_code for secret in (SECRET, "wrong")]
 
-    assert statuses == [202, 202]
+    assert statuses == [202, 401]
+    # Once each: a delivery that fails verification was verified against a connection read for it.
     assert connection_lookups.call_count == 2
 
 

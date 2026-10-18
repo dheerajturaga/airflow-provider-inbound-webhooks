@@ -51,6 +51,10 @@ breaking change, listed under "Changed event names" with the old and new names.
   The failure is logged at most once a minute.
 - A source type whose verification raises an unexpected exception answers `401`, like any failed
   verification, instead of `500`.
+- A delivery that fails verification has its webhook's connection read again, at most once per
+  `connection_cache_ttl`, and is verified again, so a secret changed in the connection applies to
+  the first delivery signed with it rather than once the cached connection expires. Unauthenticated
+  requests can now cost two connection reads per webhook and `connection_cache_ttl`, not one.
 - A JSON body holding `NaN` or `Infinity`, which JSON does not allow and MySQL refuses to store, is
   answered with `400`.
 
