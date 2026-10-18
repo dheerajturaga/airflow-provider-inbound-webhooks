@@ -82,9 +82,10 @@ FIELDS = (
     FormField(
         "store_payload",
         "Stored payload",
-        "jira: what each asset event stores of the delivery. summary (default) keeps the issue's key "
-        "fields and the changelog; full keeps the whole issue.",
-        choices=("summary", "full"),
+        "What asset events and the delivery record keep of each delivery: full, the body as received; "
+        "summary, only for jira, the issue's key fields and the changelog; or none. Defaults to summary "
+        "for jira and to full for every other source type.",
+        choices=("full", "summary", "none"),
     ),
     FormField(
         "team_name",

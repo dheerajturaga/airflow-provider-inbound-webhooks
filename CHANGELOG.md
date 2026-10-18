@@ -20,6 +20,10 @@ breaking change, listed under "Changed event names" with the old and new names.
 - `from_webhook`, `webhook`, `source_type` and `correlation_key` in each asset event's `extra`, the
   keys AIP-125 proposes for webhook events. `source` stays, holding the same as `webhook`, and
   `correlation_key` is `null` until a source type sets one.
+- `store_payload` for every source type: `full`, `summary` (only `jira` has one) or `none`, applied
+  to asset events and delivery records alike. The defaults are unchanged: `jira` stores a summary,
+  every other source type the body as received. `summary` on another source type, which 0.1.0's
+  form offered, still keeps the body as received, and logs a warning.
 - `[inbound_webhooks] rate_limit_per_minute`, off by default: verified deliveries over it are
   answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification
   do not count, and each API server worker counts on its own.

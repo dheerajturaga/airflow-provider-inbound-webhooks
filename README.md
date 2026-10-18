@@ -475,7 +475,9 @@ built in for one service each. It defaults to the webhook name, so `webhook_gith
 
 Each asset event stores the delivery's body as `extra["payload"]`, as received, unless every
 delivery also carries a full copy of the object it is about. Of the built-in services only Jira does,
-sending the whole issue each time, so `jira` stores a summary by default.
+sending the whole issue each time, so `jira` stores a summary by default. The connection's
+`store_payload` chooses for any source type: `full`, `summary` (only `jira` has one) or `none`, and
+applies to the delivery record too.
 
 ### `hmac_json`: services that sign the body
 
@@ -562,7 +564,7 @@ from Jira, which also gives its current state, or the connection can store the w
 
 | Extra field | Required | Meaning |
 |---|---|---|
-| `store_payload` | no | `summary` (default) or `full` |
+| `store_payload` | no | `summary` (default), `full` or `none` |
 
 Jira sends `issue_updated` for every edit, so select only the events your Dags need and narrow the
 webhook with a JQL filter such as `project = OPS`. Jira Cloud retries a delivery that fails or times
@@ -585,7 +587,8 @@ and `parse()`; see [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Writing Dags
 
 Schedule on an event name and read the delivery from `triggering_asset_events`. Each event's
-`extra` holds the payload, or for Jira a summary of it:
+`extra` holds the payload, or for Jira a summary of it, unless the connection's `store_payload`
+says otherwise:
 
 ```python
 from airflow.sdk import Asset, dag, task
@@ -646,6 +649,7 @@ work too. Fields left empty are treated as unset.
 | Source type | `source_type` | Source type; defaults to `<name>` |
 | Team | `team_name` | With multi-team Airflow (3.3 or later), events count as coming from this team, which decides which teams' Dags are queued. Without it, they only reach teamless Dags. Rejected on older Airflow. |
 | Maximum body size | `max_body_bytes` | Larger requests are refused before verification. Default 1 MiB. |
+| Stored payload | `store_payload` | What asset events and the delivery record keep of each delivery: `full`, the body as received; `summary`, which only `jira` has, and which keeps the whole payload on any other source type, as it did before 0.2; or `none`. Defaults to `summary` for `jira` and `full` otherwise. |
 | Other fields | | Options of the source type, listed above |
 
 Connections stored in Airflow's metadata database, in environment variables
@@ -667,7 +671,7 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
 Every verified delivery is stored in the table `inbound_webhooks_delivery` of Airflow's metadata
 database, in the transaction that records its asset events. The table records the webhook, the
 sender's delivery ID, when the delivery arrived, the names it offered and the asset events it
-recorded, plus its payload when it recorded any.
+recorded. When it recorded any, the row also keeps its payload, as `store_payload` keeps it.
 
 A retry repeats a delivery's ID and its body. It gets the answer the delivery got, and records
 nothing. A redelivery of a delivery that recorded nothing is processed again, so redelivering an
@@ -726,7 +730,8 @@ A `202` answer has these fields:
 - **Payloads are visible to anyone who can read asset events.** Each asset event stores its
   delivery's payload, and the Airflow UI and REST API show it to every user allowed to read assets,
   not only to the Dags that subscribe. GitHub push payloads, for example, include each commit
-  author's name and email address. `jira` stores only a summary of the issue by default.
+  author's name and email address. `jira` stores only a summary of the issue by default, and
+  `store_payload` set to `none` keeps no payload at all.
 - **Retries are recognised, replays are not.** A delivery sent again with the same delivery ID is
   answered as before and records nothing, which covers a service's own retries. A captured delivery
   sent again with another ID is recorded as new: GitHub's delivery ID is a header its signature
@@ -776,8 +781,8 @@ response's `detail` or in the API server log.
 ## Limitations
 
 - No replay protection: retries are recognised by their delivery ID, deliberate replays are not.
-- Each recorded asset event stores the full delivery payload, except that `jira` stores a summary
-  by default, and anyone who can read asset events can see it.
+- Each recorded asset event stores the delivery's payload, unless `store_payload` says otherwise,
+  and anyone who can read asset events can see it.
 - Asset events from webhooks are not written to Airflow's audit log, because a delivery has no
   Airflow user.
 - Delivery records are kept until you delete them from `inbound_webhooks_delivery`.

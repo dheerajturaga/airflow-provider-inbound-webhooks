@@ -124,9 +124,8 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
    is documented to take.
 4. **Payload retention.** Each source type stores the body as received, unless every delivery also
    carries a full copy of the object it is about; only Jira's do, so `jira` alone stores a summary by
-   default. Anyone who can read asset events can read the payloads. A `store_payload` option for the
-   other source types, offering a summary or nothing, could be added later without breaking anyone,
-   as long as their default stays the full body.
+   default. Every connection can set `store_payload` to `full`, `summary` where the source type has
+   one, or `none`. Anyone who can read asset events can read the payloads that are kept.
 5. **Audit.** The REST API writes an action log entry per user; a delivery has no user.
 6. **Name stability.** From 0.1.0, changing a name that an existing delivery produces is a breaking
    change, released in a new minor version below 1.0 (README, "Event names"). Renaming a repository
