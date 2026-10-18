@@ -44,8 +44,9 @@ breaking change, listed under "Changed event names" with the old and new names.
   do not count, and each API server worker counts on its own.
 - `[inbound_webhooks] max_event_payload_bytes`, off by default; AIP-125 proposes 65536 for Airflow.
   A payload larger than it, as compact JSON, is left out of the delivery's asset events, whose
-  `extra` then has `payload` `null` and `payload_truncated` `true`; the delivery record keeps it.
-  Every event's `extra` has `payload_truncated`, which is `false` unless the payload was left out.
+  `extra` then has `payload` `null` and `payload_truncated` `true`; the delivery record keeps it
+  until `airflow webhooks clean` deletes the record. Every event's `extra` has `payload_truncated`,
+  which is `false` unless the payload was left out.
 
 ### Changed
 
@@ -74,6 +75,8 @@ breaking change, listed under "Changed event names" with the old and new names.
 - On Airflow 3.3 and later, asset listeners hear of a delivery's asset events once it is committed,
   rather than while the events are recorded, so never of events that are rolled back, and one that
   fails is logged. On 3.1 and 3.2, Airflow still notifies them inside the transaction.
+- The `path` in each asset event's `extra` is cut to 1500 characters, as in the delivery record: a
+  longer path cannot be part of an asset name.
 
 ### Deprecated
 

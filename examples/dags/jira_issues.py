@@ -19,7 +19,9 @@ def get_issues(triggering_asset_events, asset) -> list[dict]:
     # Before Airflow 3.4, or with batch_asset_events, one run can carry several deliveries; events
     # are not ordered, so sort them oldest first.
     events = sorted(triggering_asset_events[asset], key=lambda event: event.timestamp)
-    return [event.extra["payload"]["issue"] for event in events]
+    # A summary over [inbound_webhooks] max_event_payload_bytes is left out of its event, which says so
+    # in payload_truncated. These Dags skip it; fetch such an issue from Jira to handle it.
+    return [event.extra["payload"]["issue"] for event in events if not event.extra.get("payload_truncated")]
 
 
 @dag(schedule=ops_ready_for_deploy)

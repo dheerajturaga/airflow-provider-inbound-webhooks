@@ -623,11 +623,16 @@ Besides `payload`, `extra` holds:
 | `from_webhook` | `true` |
 | `webhook` | The webhook's name, as in `/webhooks/<name>`; `source` holds it too |
 | `source_type` | The connection's source type, such as `github` |
-| `path` | Where the event happened, as in its names |
+| `path` | Where the event happened, as in its names, up to 1500 characters |
 | `delivery_id` | The service's ID for the delivery, where it sends one |
 | `inbound_delivery_id` | The ID of the delivery's [record](#delivery-records), set even when the service sends no delivery ID. While the record is kept (`delivery_retention`), the deliveries page and API find it by this ID, for Airflow users allowed to read the webhook's connection, which a task is not; see [Reading deliveries](#reading-deliveries) |
 | `correlation_key` | `null`: no source type sets one yet |
-| `payload_truncated` | `true` if the payload was larger than `max_event_payload_bytes` and left out, so `payload` is `null`; otherwise `false`. The delivery record keeps the payload, so the deliveries page and `GET /webhooks/_deliveries/<webhook>/<inbound_delivery_id>` show it |
+| `payload_truncated` | `true` if the payload was larger than `max_event_payload_bytes` and left out, so `payload` is `null`; otherwise `false` |
+
+When `payload_truncated` is `true`, fetch what the Dag needs from the service instead, such as the
+pull request from GitHub's API. The delivery record keeps the payload only until
+`airflow webhooks clean` deletes it after `delivery_retention` days, and shows it only to Airflow
+users allowed to read the webhook's connection, which a task is not.
 
 Anyone allowed to create asset events, through the REST API or the UI, can create one with the same
 keys, so `from_webhook` says where an event claims to come from, not that a service sent it. Read the
@@ -671,7 +676,7 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
 | `webhook_names` | empty | Comma-separated names of the webhooks to serve, such as `github,jira`. Requests for any other name are answered with `404` without looking up a connection. Empty serves no webhook, and the API server log says so once. `*` serves any name and reads its connection on every delivery, which lets anyone who can reach the endpoint make a call to your secrets backend; it is deprecated, logs a warning, and will be removed in a later release. Changes need an API server restart. |
 | `connection_cache_ttl` | `60` | Seconds a listed webhook's connection is reused before it is read again, including a missing or misconfigured one. A changed option takes up to this long to apply. A delivery that fails verification has the connection read again, at most once per this period, so a secret changed in the connection applies to the first delivery signed with it. `0` reads the connection on every delivery. |
 | `delivery_retention` | `7` | Days of delivery records that `airflow webhooks clean` keeps unless told otherwise. Keep it longer than any of your services retries a delivery: a retry that comes after its first delivery's record is deleted is recorded again. |
-| `max_event_payload_bytes` | `0` | Bytes of the largest payload copied into a delivery's asset events, measured as compact JSON in UTF-8 after `store_payload`, so for `jira` the summary is measured. A larger payload is left out: the events have `payload` `null` and `payload_truncated` `true`. The delivery record keeps the payload, so the deliveries page and API still show it. `0` copies every payload. AIP-125 proposes `65536` as Airflow's default. |
+| `max_event_payload_bytes` | `0` | Bytes of the largest payload copied into a delivery's asset events, measured as compact JSON in UTF-8 after `store_payload`, so for `jira` the summary is measured. A larger payload is left out: the events have `payload` `null` and `payload_truncated` `true`. The delivery record keeps the payload, and the deliveries page and API show it, until `airflow webhooks clean` deletes the record after `delivery_retention` days. `0` copies every payload. AIP-125 proposes `65536` as Airflow's default. |
 | `rate_limit_per_minute` | `0` | Verified deliveries each API server worker records per webhook and minute; more are answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification do not count, so they cannot use the limit up. Each worker counts on its own, so N workers record up to N times as many. GitLab disables a webhook after four failed deliveries in a row, `429` included, so set the limit above what a GitLab webhook sends. `0` turns the limit off. |
 
 ### Delivery records
@@ -680,7 +685,7 @@ Every verified delivery is stored in the table `inbound_webhooks_delivery` of Ai
 database, in the transaction that records its asset events. The table records the webhook, the
 sender's delivery ID, when the delivery arrived, the names it offered and the asset events it
 recorded. When it recorded any, the row also keeps its payload, as `store_payload` keeps it, even
-one that `max_event_payload_bytes` leaves out of the asset events.
+one that `max_event_payload_bytes` leaves out of the asset events, until the row is deleted.
 
 A retry repeats a delivery's ID and its body. It gets the answer the delivery got, with status `200`
 and `outcome` `duplicate`, and records nothing. A redelivery of a delivery that recorded nothing is
@@ -726,7 +731,7 @@ not a public interface yet, and can change in any release.
 
 | Command | Does |
 |---|---|
-| `airflow webhooks check <name>` | Reports how deliveries to a webhook would be served: whether `webhook_names` lists it, whether its connection is valid, and whether the delivery table is ready. Exits with `1` if deliveries would fail |
+| `airflow webhooks check <name>` | Reports how deliveries to a webhook would be served: whether `webhook_names` lists it, whether its connection is valid, whether each `[inbound_webhooks]` option that takes a number is an integer, and whether the delivery table is ready. Exits with `1` if deliveries would fail |
 | `airflow webhooks deliveries <name>` | Shows the latest deliveries of every team (`--limit`, 1 to 500, and `--output`), or with `--id` one delivery as JSON, with its payload |
 | `airflow webhooks clean` | Deletes delivery records older than `delivery_retention` days, or `--older-than` days, after asking. `--yes` skips the question, which a schedule needs; `--dry-run` only counts |
 | `airflow webhooks send-test` | Sends a signed test delivery, as `python -m airflow_inbound_webhooks.send_test_event` does |

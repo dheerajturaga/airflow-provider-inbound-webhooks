@@ -524,12 +524,21 @@ def build_audit_log(webhook: ConfiguredWebhook, event: WebhookEvent, asset_event
 
 def exceeds_max_event_payload_bytes(payload: dict[str, Any] | None) -> bool:
     """Return whether a payload, as compact JSON in UTF-8, is larger than ``max_event_payload_bytes``."""
-    limit = conf.getint(configuration.SECTION, configuration.MAX_EVENT_PAYLOAD_BYTES, fallback=0)
+    limit = conf.getint(
+        configuration.SECTION,
+        configuration.MAX_EVENT_PAYLOAD_BYTES,
+        fallback=configuration.DEFAULT_MAX_EVENT_PAYLOAD_BYTES,
+    )
     if payload is None or limit <= 0:
         return False
     # surrogatepass: json reads an escaped lone surrogate, such as "\ud800", which UTF-8 cannot encode.
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(errors="surrogatepass")
     return len(encoded) > limit
+
+
+def shorten_path(path: str | None) -> str | None:
+    """Return a delivery's path as its row and its events store it: a longer one cannot be in an asset name."""
+    return None if path is None else path[:MAX_PATH_LENGTH]
 
 
 def build_event_extra(
@@ -545,7 +554,8 @@ def build_event_extra(
         "source_type": webhook.source_type,
         # The same as webhook, kept because it was public first.
         "source": webhook.name,
-        "path": event.path,
+        # Shortened, or a signed delivery could put any amount of text in every event despite the cap.
+        "path": shorten_path(event.path),
         "delivery_id": event.delivery_id,
         # What links an event to its delivery: the sender's delivery_id can be null, and is unique only
         # together with the body.
@@ -623,15 +633,17 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
             # Chosen before the row is written, because every event carries it. A redelivery updates the
             # row of the delivery it repeats.
             record_id = str(uuid.uuid4()) if original is None else original.id
-            # One for every event, so the payload is measured once.
-            extra = build_event_extra(webhook, event, payload, record_id)
             subscribed, only_paused_subscribers = find_subscribed_assets(session, candidates)
-            for asset_model in subscribed:
-                asset_event = asset_manager.register_asset_change(
-                    asset=asset_model, extra=extra, session=session, **team_arguments, **sink_arguments
-                )
-                if asset_event is not None:
-                    asset_events[asset_model.name] = asset_event.id
+            if subscribed:
+                # One for every event, so the payload is measured once, and only for a delivery that
+                # records events: most deliveries of a service that sends every event record none.
+                extra = build_event_extra(webhook, event, payload, record_id)
+                for asset_model in subscribed:
+                    asset_event = asset_manager.register_asset_change(
+                        asset=asset_model, extra=extra, session=session, **team_arguments, **sink_arguments
+                    )
+                    if asset_event is not None:
+                        asset_events[asset_model.name] = asset_event.id
             if asset_events:
                 outcome = ACCEPTED
                 session.add(build_audit_log(webhook, event, asset_events))
@@ -656,8 +668,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
                         received_at=datetime.now(tz=timezone.utc),
                         source_type=webhook.source_type,
                         correlation_key=event.correlation_key,
-                        # Longer paths cannot be in an asset name anyway.
-                        path=None if event.path is None else event.path[:MAX_PATH_LENGTH],
+                        path=shorten_path(event.path),
                         team_name=webhook.team_name,
                         **recorded,
                     )

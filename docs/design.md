@@ -172,9 +172,12 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
    one, or `none`. Anyone who can read asset events can read the payloads that are kept. A delivery
    that matches several names copies its payload into each of their events, and every task it
    starts receives the copies, so `max_event_payload_bytes` leaves a payload larger than it out of
-   the events, with `payload_truncated` set, and the delivery record keeps it. The size is that of
-   compact JSON in UTF-8, measured once per delivery. The option is off by default, so Dags that
-   read payloads keep them; AIP-125 proposes 65536 for Airflow, which has no such Dags yet.
+   the events, with `payload_truncated` set. The delivery record keeps it until it is deleted after
+   `delivery_retention`, and tasks cannot read it there, so a Dag that needs the payload fetches the
+   object from the service. The size is that of compact JSON in UTF-8, measured once per delivery
+   that records events, and the extra's `path` is shortened as in the record, so the cap bounds the
+   extra. The option is off by default, so Dags that read payloads keep them; AIP-125 proposes 65536
+   for Airflow, which has no such Dags yet.
 5. **Audit.** The REST API writes an audit log entry per user; a delivery has no user, so a
    delivery that records events writes one owned by `webhook:<name>`, with a display name, which
    Airflow's audit log page needs to show the owner. Rejected requests write none: anyone can send

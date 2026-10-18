@@ -509,6 +509,47 @@ def test_payload_holding_a_lone_surrogate_can_be_measured():
     assert app.exceeds_max_event_payload_bytes(json.loads(r'{"title": "\ud800"}'))
 
 
+@mock.patch.dict(os.environ, build_conn_env("github"))
+def test_events_copy_a_payload_of_any_size_unless_max_event_payload_bytes_is_set(client, session, subscribe):
+    # The option is unset, so the provider's default applies, not the 65536 AIP-125 proposes for Airflow.
+    subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
+    payload = {**LABELED, "pull_request": {"body": "x" * 70_000}}
+
+    with mock.patch.dict(os.environ):
+        # Even where the environment running the tests sets it.
+        os.environ.pop("AIRFLOW__INBOUND_WEBHOOKS__MAX_EVENT_PAYLOAD_BYTES", None)
+        assert post_github(client, payload).json()["outcome"] == "accepted"
+
+    extra = session.scalars(select(AssetEvent.extra)).one()
+    assert (extra["payload"], extra["payload_truncated"]) == (payload, False)
+
+
+@mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(max_event_payload_bytes="65536")})
+@pytest.mark.parametrize(
+    ("subscriptions", "measurements"),
+    [
+        pytest.param([], 0, id="no-subscriber"),
+        pytest.param(
+            ["github/my-org/web/pull_request/labeled/deploy-preview", "github/*/pull_request"],
+            1,
+            id="two-names",
+        ),
+    ],
+)
+def test_payload_is_measured_once_and_only_for_a_delivery_that_records_events(
+    client, subscribe, subscriptions, measurements
+):
+    for number, name in enumerate(subscriptions):
+        subscribe(f"dag_{number}", name)
+
+    with mock.patch.object(
+        app, "exceeds_max_event_payload_bytes", wraps=app.exceeds_max_event_payload_bytes
+    ) as measure:
+        post_github(client)
+
+    assert measure.call_count == measurements
+
+
 @mock.patch.dict(os.environ, DEPLOYBOT_CONN)
 def test_any_hmac_service_configured_from_connection_extra(client, session, subscribe):
     subscribe("smoke_test_billing", "deploybot/billing/deployed")
@@ -914,14 +955,15 @@ def test_empty_delivery_id_is_no_delivery_id(client, session, subscribe):
 
 
 @mock.patch.dict(os.environ, DEPLOYBOT_CONN)
-def test_path_too_long_for_its_column_is_stored_shortened(client, session, subscribe):
+def test_path_too_long_to_be_in_an_asset_name_is_stored_shortened(client, session, subscribe):
     subscribe("smoke_test_any_service", "deploybot/*/deployed")
 
     post_deploybot(client, {"event": "deployed", "service": "x" * 2000})
 
     (delivery,) = get_deliveries(session)
     assert delivery.path == "x" * 1500
-    assert count_asset_events(session) == 1
+    # In the events too, where max_event_payload_bytes bounds the payload but not the path.
+    assert session.scalars(select(AssetEvent.extra)).one()["path"] == "x" * 1500
 
 
 @mock.patch.dict(os.environ, DEPLOYBOT_CONN)

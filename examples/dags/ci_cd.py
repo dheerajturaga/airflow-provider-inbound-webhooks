@@ -20,7 +20,9 @@ def get_payloads(triggering_asset_events, asset) -> list[dict]:
     # Before Airflow 3.4, or with batch_asset_events, one run can carry several deliveries; events
     # are not ordered, so sort them oldest first.
     events = sorted(triggering_asset_events[asset], key=lambda event: event.timestamp)
-    return [event.extra["payload"] for event in events]
+    # A payload over [inbound_webhooks] max_event_payload_bytes is left out of its event, which says so
+    # in payload_truncated. These Dags skip it; one that needs it fetches the object from the service.
+    return [event.extra["payload"] for event in events if not event.extra.get("payload_truncated")]
 
 
 @dag(schedule=web_deploy_preview_label)
@@ -37,8 +39,8 @@ def web_deploy_preview():
 def web_deploy_staging():
     @task
     def deploy(*, triggering_asset_events=None):
-        latest = get_payloads(triggering_asset_events, web_main_push)[-1]
-        print(f"Deploying {latest['after']} to staging")
+        if payloads := get_payloads(triggering_asset_events, web_main_push):
+            print(f"Deploying {payloads[-1]['after']} to staging")
 
     deploy()
 
@@ -59,8 +61,8 @@ def publish_release_notes():
 def api_deploy():
     @task
     def deploy(*, triggering_asset_events=None):
-        latest = get_payloads(triggering_asset_events, api_pipeline_success)[-1]
-        print(f"Deploying {latest['object_attributes']['sha']}")
+        if payloads := get_payloads(triggering_asset_events, api_pipeline_success):
+            print(f"Deploying {payloads[-1]['object_attributes']['sha']}")
 
     deploy()
 
