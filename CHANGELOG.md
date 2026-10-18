@@ -124,10 +124,11 @@ breaking change, listed under "Changed event names" with the old and new names.
   under **Browse → Webhook deliveries**, with `GET /webhooks/_deliveries/<webhook>?delivery_id=<ID>`
   or with `airflow webhooks deliveries <webhook> --delivery-id <ID>`. The deliveries page and API
   are not a public interface yet, so automation that read `asset_events` has no stable replacement
-  yet. Read `outcome` instead of `status`. Where `status` was `accepted`, `outcome` is `accepted`,
-  or `duplicate`, answered `200`, for a retry, which 0.1.0 recorded again: treat a recognised retry
-  as a success. Where `status` was `no_subscribers`, `outcome` is `no_subscribers` or
-  `dag_paused`.
+  yet. Read `outcome` instead of `status`. Where `status` was `accepted`, `outcome` is `accepted`;
+  `duplicate`, answered `200`, for a retry, which 0.1.0 recorded again: treat a recognised retry as
+  a success; or `dag_paused` or `no_subscribers` for a delivery that 0.1.0 recorded although no Dag
+  that is not paused, draining or stale schedules on its names (see "Changed"). Where `status` was
+  `no_subscribers`, `outcome` is `no_subscribers`.
 
 ## 0.1.0 - 2026-10-14
 

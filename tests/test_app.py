@@ -882,14 +882,8 @@ def test_copy_recorded_concurrently_with_one_that_recorded_nothing_is_answered_a
     if subscriber is not None:
         subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview", **subscriber)
     post_github(client)
-    find_delivery = app.find_delivery
 
-    def find_after_the_first_delivery_committed(*args):
-        # The first lookup misses, as when both requests check before either has committed.
-        return None if find.call_count == 1 else find_delivery(*args)
-
-    with mock.patch.object(app, "find_delivery", side_effect=find_after_the_first_delivery_committed) as find:
-        copy = post_github(client)
+    copy = post_copy_that_lost_the_race(client)
 
     assert (copy.status_code, copy.json()) == (
         202,

@@ -867,7 +867,7 @@ listener that fails is logged, and the delivery is answered as it would be witho
 
 ### Responses and troubleshooting
 
-`airflow webhooks check <name>` reports what would happen to a webhook's deliveries, and why they
+`airflow webhooks check <webhook>` reports what would happen to a webhook's deliveries, and why they
 would fail. A `200` or `202` answer has two fields:
 
 | Field | Meaning |
