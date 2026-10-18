@@ -80,9 +80,11 @@ breaking change, listed under "Changed event names" with the old and new names.
 - A JSON body holding a number too large to store, such as `1e400`, which Python reads as infinity,
   is answered with `400`, as one holding `Infinity` is. Before, it was recorded, and stored as
   `Infinity` where the database accepted it.
-- A JSON body that nests objects and arrays more than 100 levels deep is answered with `400`.
-  Before, one nested about 255 levels deep was recorded in asset events that Airflow's REST API
-  cannot return, and one nested a little less deeply than Python can parse was answered with `500`.
+- A JSON body that nests objects and arrays more than 64 levels deep is answered with `400`.
+  Before, MySQL refused to store one nested about 100 levels deep, which was answered with `503`, so
+  a sender that retries kept sending it; one nested about 255 levels deep was recorded in asset
+  events that Airflow's REST API cannot return; and one nested a little less deeply than Python can
+  parse was answered with `500`.
 
 ### Deprecated
 

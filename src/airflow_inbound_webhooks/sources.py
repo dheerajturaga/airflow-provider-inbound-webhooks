@@ -75,11 +75,12 @@ class WebhookSource(ABC):
 
 
 # Levels of objects and arrays a JSON body may nest, its own object being the first. Webhook payloads
-# nest far less. What reads an accepted payload walks it once per level, and gives up long before
-# Python's json does: pydantic, with which Airflow's APIs serve asset events, to tasks too, refuses
-# data nested about 255 levels deep; FastAPI's encoder in the deliveries API runs out of recursion at
-# about the same depth; storing a payload, at about 1000.
-MAX_JSON_DEPTH = 100
+# nest far less. What stores or reads an accepted payload gives up long before Python's json does:
+# MySQL refuses a JSON document nested more than 100 levels deep, counting the value innermost, and
+# asset events hold the payload a level down in their extra, so the limit stays well under that.
+# Pydantic, with which Airflow's APIs serve asset events, refuses data nested about 255 levels deep,
+# and FastAPI's encoder in the deliveries API runs out of recursion at about the same depth.
+MAX_JSON_DEPTH = 64
 NESTED_TOO_DEEPLY = f"JSON body is nested more than {MAX_JSON_DEPTH} levels deep"
 
 
