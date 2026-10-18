@@ -626,9 +626,11 @@ folded to ASCII as delivery names are, so `detail="🚀 Café"` subscribes to th
 path that holds a literal `*`. A name that no delivery offers, such as one that is not folded to
 ASCII, is refused.
 
-Look a topic's events up with the topic, as in `triggering_asset_events[deployed]` above, or test
-for them with `deployed in triggering_asset_events`. The keys you get by iterating over
-`triggering_asset_events` are plain assets, which never equal a topic, since their group differs.
+Look a topic's events up with the topic, as in `triggering_asset_events[deployed]` above. A topic
+with no events in the run, as in a run started by hand, gives an empty list, so test for events with
+`if triggering_asset_events[deployed]:`; `deployed in triggering_asset_events` is true for any
+asset, with or without events. The keys you get by iterating over `triggering_asset_events` are
+plain assets, which never equal a topic, since their group differs.
 
 A topic is an asset in the group `webhook`. It refuses `extra` and `watchers`, because only
 deliveries record its events, and takes `access_control` on Airflow 3.3 and later; assets have none
