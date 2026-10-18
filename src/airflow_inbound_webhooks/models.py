@@ -15,8 +15,8 @@ from sqlalchemy import JSON, Column, Index, MetaData, String, Table, UniqueConst
 
 metadata = MetaData(schema=_get_schema(), naming_convention=naming_convention)
 
-# Values of delivery_table.c.outcome.
-EVENTS_RECORDED = "events_recorded"
+# Values of delivery_table.c.outcome. A delivery is accepted when it records asset events.
+ACCEPTED = "accepted"
 NO_SUBSCRIBERS = "no_subscribers"
 # A Dag schedules on a candidate, but every such Dag is paused or draining, so nothing is recorded.
 DAG_PAUSED = "dag_paused"

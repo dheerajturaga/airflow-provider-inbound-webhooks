@@ -56,7 +56,8 @@ WEBHOOK_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 MAX_DELIVERY_ID_LENGTH = 255
 MAX_PATH_LENGTH = 1500
 MAX_TEAM_NAME_LENGTH = 50
-# The response's outcome for a retry, which writes no row; other outcomes are stored on the row.
+# The response's outcome for a retry, which writes no row and is answered 200 rather than 202; other
+# outcomes are stored on the row.
 DUPLICATE = "duplicate"
 # The database is down or locked. SQLite also reports a missing table this way; PostgreSQL and MySQL
 # report one as a ProgrammingError, which is only answered as unavailable when the table is missing.
@@ -479,7 +480,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
     from airflow.assets.manager import asset_manager
     from airflow.utils.session import create_session
 
-    from airflow_inbound_webhooks.models import DAG_PAUSED, EVENTS_RECORDED, NO_SUBSCRIBERS, delivery_table
+    from airflow_inbound_webhooks.models import ACCEPTED, DAG_PAUSED, NO_SUBSCRIBERS, delivery_table
 
     candidates = build_candidate_names(webhook.name, event)
     payload = webhook.select_payload(event.payload)
@@ -509,7 +510,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
             original = find_delivery(session, webhook.name, event.delivery_id, body_digest)
             # A retry. A delivery that recorded nothing is processed again instead: a redelivery after
             # subscribing to one of its names is how its README walkthrough ends.
-            if original is not None and original.outcome == EVENTS_RECORDED:
+            if original is not None and original.outcome == ACCEPTED:
                 log.debug("Webhook %s: delivery %r was recorded before", webhook.name, event.delivery_id)
                 return build_response(
                     event.delivery_id, DUPLICATE, original.asset_events, original.candidates
@@ -522,7 +523,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
                 if asset_event is not None:
                     asset_events[asset_model.name] = asset_event.id
             if asset_events:
-                outcome = EVENTS_RECORDED
+                outcome = ACCEPTED
                 session.add(build_audit_log(webhook, event, asset_events))
             else:
                 # Nothing is recorded for a paused Dag, so unpausing it never replays the delivery.
@@ -556,7 +557,7 @@ def record_delivery(webhook: ConfiguredWebhook, event: WebhookEvent, body_digest
                 # the update waits for that copy's transaction, and then matches nothing.
                 result = session.execute(
                     update(delivery_table)
-                    .where(delivery_table.c.id == original.id, delivery_table.c.outcome != EVENTS_RECORDED)
+                    .where(delivery_table.c.id == original.id, delivery_table.c.outcome != ACCEPTED)
                     .values(**recorded)
                 )
                 if cast("CursorResult[Any]", result).rowcount != 1:
@@ -591,6 +592,7 @@ def health() -> dict[str, str]:
 @router.post("/{name}", status_code=HTTPStatus.ACCEPTED)
 def receive_webhook(
     request: Request,
+    response: Response,
     webhook: WebhookDep,
     body: Annotated[bytes, Depends(read_limited_body)],
 ) -> dict[str, Any]:
@@ -615,8 +617,8 @@ def receive_webhook(
             HTTPStatus.BAD_REQUEST, f"Delivery ID is longer than {MAX_DELIVERY_ID_LENGTH} characters"
         )
     try:
-        with get_stats().timer("inbound_webhooks.delivery_duration", tags={"webhook": webhook.name}):
-            response = record_delivery(webhook, event, hashlib.sha256(body).hexdigest())
+        with get_stats().timer("webhooks.delivery_duration", tags={"webhook": webhook.name}):
+            answer = record_delivery(webhook, event, hashlib.sha256(body).hexdigest())
     except (*UNAVAILABLE_DATABASE_ERRORS, ProgrammingError) as e:
         # A ProgrammingError that is not about a missing table is a bug, which a sender's retries would
         # not fix.
@@ -635,8 +637,11 @@ def receive_webhook(
             "Temporarily unavailable",
             headers={"Retry-After": str(UNAVAILABLE_RETRY_AFTER_SECONDS)},
         ) from e
-    get_stats().incr(f"inbound_webhooks.deliveries.{response['outcome']}", tags={"webhook": webhook.name})
-    return response
+    if answer["outcome"] == DUPLICATE:
+        # Nothing new was accepted.
+        response.status_code = HTTPStatus.OK
+    get_stats().incr("webhooks.deliveries", tags={"webhook": webhook.name, "outcome": answer["outcome"]})
+    return answer
 
 
 async def count_rejection(request: Request, exc: Exception) -> Response:
@@ -647,7 +652,9 @@ async def count_rejection(request: Request, exc: Exception) -> Response:
     if request.method == "POST":
         name = request.path_params.get("name")
         tag = name if name in get_webhook_names() else UNLISTED_WEBHOOK_TAG
-        get_stats().incr(f"inbound_webhooks.rejections.{exc.status_code}", tags={"webhook": tag})
+        # int() first: before Python 3.11, str() of an HTTPStatus is its name, such as HTTPStatus.NOT_FOUND.
+        status = str(int(exc.status_code))
+        get_stats().incr("webhooks.rejections", tags={"webhook": tag, "status": status})
     return await http_exception_handler(request, exc)
 
 

@@ -155,7 +155,7 @@ machine running the Airflow API server (Airflow 3.1.1 or later).
 
    ```text
    HTTP 202
-   {"status":"accepted","asset_events":{"demo/billing/deployed":1},"candidates":["demo/billing/deployed","demo/*/deployed"]}
+   {"status":"accepted","outcome":"accepted","delivery_id":null,"asset_events":{"demo/billing/deployed":1},"candidates":["demo/billing/deployed","demo/*/deployed"]}
    ```
 
    Anything else? See [Responses and troubleshooting](#responses-and-troubleshooting).
@@ -664,7 +664,7 @@ variables `AIRFLOW__INBOUND_WEBHOOKS__<OPTION>`:
 |---|---|---|
 | `webhook_names` | empty | Comma-separated names of the webhooks to serve, such as `github,jira`. Requests for any other name are answered with `404` without looking up a connection. Empty serves no webhook, and the API server log says so once. `*` serves any name and reads its connection on every delivery, which lets anyone who can reach the endpoint make a call to your secrets backend; it is deprecated, logs a warning, and will be removed in a later release. Changes need an API server restart. |
 | `connection_cache_ttl` | `60` | Seconds a listed webhook's connection is reused before it is read again, including a missing or misconfigured one. A rotated secret or changed option takes up to this long to apply. `0` reads the connection on every delivery. |
-| `delivery_retention_days` | `7` | Days of delivery records that `airflow webhooks clean` keeps unless told otherwise. Keep it longer than any of your services retries a delivery: a retry that comes after its first delivery's record is deleted is recorded again. |
+| `delivery_retention` | `7` | Days of delivery records that `airflow webhooks clean` keeps unless told otherwise. Keep it longer than any of your services retries a delivery: a retry that comes after its first delivery's record is deleted is recorded again. |
 | `rate_limit_per_minute` | `0` | Verified deliveries each API server worker records per webhook and minute; more are answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification do not count, so they cannot use the limit up. Each worker counts on its own, so N workers record up to N times as many. GitLab disables a webhook after four failed deliveries in a row, `429` included, so set the limit above what a GitLab webhook sends. `0` turns the limit off. |
 
 ### Delivery records
@@ -674,16 +674,16 @@ database, in the transaction that records its asset events. The table records th
 sender's delivery ID, when the delivery arrived, the names it offered and the asset events it
 recorded. When it recorded any, the row also keeps its payload, as `store_payload` keeps it.
 
-A retry repeats a delivery's ID and its body. It gets the answer the delivery got, and records
-nothing. A redelivery of a delivery that recorded nothing is processed again, so redelivering an
-event after subscribing to one of its names records it. Only senders that send a delivery ID can be
-recognised this way: GitHub (`X-GitHub-Delivery`), GitLab 17.4 and later (`Idempotency-Key`) and
-Jira (`X-Atlassian-Webhook-Identifier`). `hmac_json` and `token_header` deliveries, and deliveries
-with an empty ID, are never taken for retries.
+A retry repeats a delivery's ID and its body. It gets the answer the delivery got, with status `200`
+and `outcome` `duplicate`, and records nothing. A redelivery of a delivery that recorded nothing is
+processed again, so redelivering an event after subscribing to one of its names records it. Only
+senders that send a delivery ID can be recognised this way: GitHub (`X-GitHub-Delivery`), GitLab
+17.4 and later (`Idempotency-Key`) and Jira (`X-Atlassian-Webhook-Identifier`). `hmac_json` and
+`token_header` deliveries, and deliveries with an empty ID, are never taken for retries.
 
 `airflow db migrate` creates and upgrades the table, and `airflow db reset` drops it. On Airflow 3.1
 both need [`external_db_managers`](#compatibility). `airflow db clean` does not remove its rows:
-`airflow webhooks clean` deletes those older than `delivery_retention_days`, so run it on a
+`airflow webhooks clean` deletes those older than `delivery_retention`, so run it on a
 schedule, as you would `airflow db clean`.
 
 ### Reading deliveries
@@ -719,7 +719,7 @@ not a public interface yet, and can change in any release.
 |---|---|
 | `airflow webhooks check <name>` | Reports how deliveries to a webhook would be served: whether `webhook_names` lists it, whether its connection is valid, and whether the delivery table is ready. Exits with `1` if deliveries would fail |
 | `airflow webhooks deliveries <name>` | Shows the latest deliveries of every team (`--limit`, 1 to 500, and `--output`), or with `--id` one delivery as JSON, with its payload |
-| `airflow webhooks clean` | Deletes delivery records older than `delivery_retention_days`, or `--older-than` days, after asking. `--yes` skips the question, which a schedule needs; `--dry-run` only counts |
+| `airflow webhooks clean` | Deletes delivery records older than `delivery_retention` days, or `--older-than` days, after asking. `--yes` skips the question, which a schedule needs; `--dry-run` only counts |
 | `airflow webhooks send-test` | Sends a signed test delivery, as `python -m airflow_inbound_webhooks.send_test_event` does |
 
 ### Audit log and metrics
@@ -730,30 +730,35 @@ delivery ID and the recorded asset events in its extra. The entry has no Dag or 
 scheduler creates the runs later. Deliveries that record nothing, retries and refused requests
 write no entry.
 
-The endpoint sends these metrics through Airflow's metrics configuration, each tagged with
-`webhook`:
+The endpoint sends these metrics through Airflow's metrics configuration, under the names AIP-125
+proposes for Airflow, so dashboards keep working when webhooks move into Airflow:
 
-| Metric | Type | Meaning |
-|---|---|---|
-| `inbound_webhooks.deliveries.<outcome>` | Counter | Answered deliveries, by `outcome` |
-| `inbound_webhooks.rejections.<status>` | Counter | Refused deliveries, by status code. Names not in `webhook_names` share the tag value `other` |
-| `inbound_webhooks.delivery_duration` | Timer | Time spent recording a verified delivery |
+| Metric | Type | Tags | Meaning |
+|---|---|---|---|
+| `webhooks.deliveries` | Counter | `webhook`, `outcome` | Answered deliveries |
+| `webhooks.rejections` | Counter | `webhook`, `status` | Refused deliveries, by status code. Names not in `webhook_names` share the `webhook` value `other` |
+| `webhooks.delivery_duration` | Timer | `webhook` | Time spent recording a verified delivery |
+
+The tags need a metrics backend that keeps them: OpenTelemetry (`[metrics] otel_on`), or StatsD with
+`statsd_datadog_enabled` or `statsd_influxdb_enabled`. Plain StatsD drops tags, so it counts the
+deliveries of every webhook and outcome together.
 
 ### Responses and troubleshooting
 
 `airflow webhooks check <name>` reports what would happen to a webhook's deliveries, and why they
-would fail. A `202` answer has these fields:
+would fail. A `200` or `202` answer has these fields:
 
 | Field | Meaning |
 |---|---|
 | `status` | `accepted` if any asset event was recorded, otherwise `no_subscribers` |
-| `outcome` | What became of the delivery: `events_recorded`; `no_subscribers`; `dag_paused` when every Dag that schedules on one of its names is paused (or, on Airflow 3.4 and later, draining), so nothing is recorded; or `duplicate` for a retry, which records nothing and repeats the rest of its first answer |
+| `outcome` | What became of the delivery: `accepted` when it recorded asset events; `no_subscribers`; `dag_paused` when every Dag that schedules on one of its names is paused (or, on Airflow 3.4 and later, draining), so nothing is recorded; or `duplicate` for a retry, answered `200`, which records nothing and repeats the rest of its first answer |
 | `delivery_id` | The sender's ID for the delivery, or `null` if it sends none |
 | `asset_events` | The asset event recorded on each subscribed name |
 | `candidates` | Every name the delivery offered |
 
 | Status | Meaning | What to check |
 |---|---|---|
+| `200` | A retry, with `outcome` `duplicate`: the delivery was recorded before, and nothing is recorded again | Nothing; the sender sent the delivery again |
 | `202` `accepted` | Recorded; `asset_events` lists the asset event per subscribed name | If no Dag run starts, check that the scheduler is running |
 | `202` `no_subscribers` | Verified, but no Dag that is not paused schedules on any of the `candidates`, so no asset event is recorded | With `outcome` `dag_paused`, unpause the Dag. Otherwise, the Dag schedules on one of the `candidates` and has been parsed: `airflow dags reserialize` parses it now. The API server logs the `candidates` at debug level |
 | `400` | The body is not a JSON object or holds `NaN` or `Infinity`, which JSON does not allow, the event name is missing, or the delivery ID is longer than 255 characters | GitHub: the content type is `application/json`. Jira: *Exclude body* is unchecked |

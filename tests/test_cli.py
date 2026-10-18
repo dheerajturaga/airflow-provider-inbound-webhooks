@@ -121,7 +121,7 @@ def test_clean_deletes_only_deliveries_older_than_the_retention(session, old_and
     assert "Deleted 1 deliveries" in capsys.readouterr().out
 
 
-@mock.patch.dict(os.environ, {"AIRFLOW__INBOUND_WEBHOOKS__DELIVERY_RETENTION_DAYS": "0"})
+@mock.patch.dict(os.environ, {"AIRFLOW__INBOUND_WEBHOOKS__DELIVERY_RETENTION": "0"})
 def test_clean_keeps_the_configured_retention_by_default(session, old_and_new_deliveries):
     cli.main(["clean", "--yes"])
 

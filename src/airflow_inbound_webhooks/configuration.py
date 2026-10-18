@@ -16,7 +16,7 @@ SECTION = "inbound_webhooks"
 WEBHOOK_NAMES = "webhook_names"
 CONNECTION_CACHE_TTL = "connection_cache_ttl"
 RATE_LIMIT_PER_MINUTE = "rate_limit_per_minute"
-DELIVERY_RETENTION_DAYS = "delivery_retention_days"
+DELIVERY_RETENTION = "delivery_retention"
 ANY_WEBHOOK_NAME = "*"
 DEFAULT_CONNECTION_CACHE_TTL = 60
 DEFAULT_DELIVERY_RETENTION_DAYS = 7
@@ -64,7 +64,7 @@ def build_config_section() -> dict[str, Any]:
                     "example": "600",
                     "default": "0",
                 },
-                DELIVERY_RETENTION_DAYS: {
+                DELIVERY_RETENTION: {
                     "description": (
                         "Days of delivery records that airflow webhooks clean keeps unless told otherwise. "
                         "Keep it longer than any of your services retries a delivery: a retry that comes "

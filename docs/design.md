@@ -19,7 +19,7 @@ documentation is in the [README](../README.md).
    into a path and kinds.
 5. `naming.build_candidate_names` turns those into every subscribable name.
 6. If the delivery table already holds the delivery's ID and body digest for this webhook, and that
-   delivery recorded events, it is a retry: it is answered from that row, and nothing is written. A
+   delivery recorded events, it is a retry: it is answered `200` from that row, and nothing is written. A
    delivery that recorded nothing is processed again, so a redelivery after subscribing records it.
 7. One query finds which candidates are active assets that a Dag schedules on which is not stale,
    paused or draining, directly or through `Asset.ref(name=...)` or `Asset.ref(uri=...)`, which
