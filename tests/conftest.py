@@ -152,7 +152,7 @@ def add_delivery(session):
             "candidates": ["github/my-org/web/push"],
             "asset_events": {"github/my-org/web/push": 1},
             "correlation_key": None,
-            "outcome": "events_recorded",
+            "outcome": "accepted",
             "team_name": None,
             "payload": {"ref": "refs/heads/main"},
             **values,

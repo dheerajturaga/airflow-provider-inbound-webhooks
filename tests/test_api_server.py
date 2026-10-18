@@ -145,7 +145,7 @@ def test_signed_delivery_queues_subscribed_dag(api_server_url, session, subscrib
     assert [extra["source"] for extra in session.scalars(select(AssetEvent.extra))] == ["github"]
     assert list(session.scalars(select(AssetDagRunQueue.target_dag_id))) == ["web_deploy_preview"]
     # The table exists where Airflow put it, and the API server process can write to it.
-    assert list(session.scalars(select(delivery_table.c.outcome))) == ["events_recorded"]
+    assert list(session.scalars(select(delivery_table.c.outcome))) == ["accepted"]
 
 
 def test_wrong_secret_is_rejected(api_server_url, session, subscribe, webhook_connection):
@@ -284,7 +284,7 @@ def test_deliveries_api_takes_an_api_token(api_server_url, api_token, subscribe,
     status, body = request_json(f"{api_server_url}/webhooks/_deliveries/github", token=api_token)
 
     assert status == 200
-    assert [delivery["outcome"] for delivery in body["deliveries"]] == ["events_recorded"]
+    assert [delivery["outcome"] for delivery in body["deliveries"]] == ["accepted"]
     assert request_json(f"{api_server_url}/webhooks/_deliveries/github")[0] == 401
 
 

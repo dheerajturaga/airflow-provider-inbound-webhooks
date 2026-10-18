@@ -15,8 +15,8 @@ breaking change, listed under "Changed event names" with the old and new names.
   and the body, gets the answer the delivery got and records nothing, so a service's retries no
   longer queue Dags again. A redelivery of a delivery that recorded nothing is processed again. A
   delivery ID longer than 255 characters is refused with `400`, and an empty one counts as none.
-- `outcome` and `delivery_id` in every `202` answer. `outcome` is `events_recorded`,
-  `no_subscribers`, `dag_paused`, or `duplicate` for a retry.
+- `outcome` and `delivery_id` in every answer. `outcome` is `accepted`, `no_subscribers`,
+  `dag_paused`, or `duplicate` for a retry, which is answered `200` instead of `202`.
 - `from_webhook`, `webhook`, `source_type` and `correlation_key` in each asset event's `extra`, the
   keys AIP-125 proposes for webhook events. `source` stays, holding the same as `webhook`, and
   `correlation_key` is `null` until a source type sets one.
@@ -30,10 +30,11 @@ breaking change, listed under "Changed event names" with the old and new names.
 - `GET /webhooks/_health`, answered without a login.
 - `airflow webhooks check`, `deliveries`, `clean` and `send-test`, on Airflow 3.2 and later, and as
   `python -m airflow_inbound_webhooks.cli` on 3.1. `clean` deletes delivery records older than the
-  new `[inbound_webhooks] delivery_retention_days`, 7 by default.
+  new `[inbound_webhooks] delivery_retention`, 7 days by default.
 - An audit log entry for each delivery that records asset events, owned by `webhook:<name>`.
-- Metrics: `inbound_webhooks.deliveries.<outcome>`, `inbound_webhooks.rejections.<status>` and
-  `inbound_webhooks.delivery_duration`, each tagged with the webhook.
+- Metrics, under the names AIP-125 proposes for Airflow: `webhooks.deliveries`, tagged with the
+  webhook and the outcome; `webhooks.rejections`, tagged with the webhook and the status code; and
+  `webhooks.delivery_duration`, tagged with the webhook.
 - `[inbound_webhooks] rate_limit_per_minute`, off by default: verified deliveries over it are
   answered with `429` and `Retry-After` before anything is recorded. Requests that fail verification
   do not count, and each API server worker counts on its own.

@@ -319,7 +319,7 @@ def test_stored_payload_follows_the_connection(client, session, subscribe, conn_
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
 
     with mock.patch.dict(os.environ, conn_env):
-        assert post_github(client).json()["outcome"] == "events_recorded"
+        assert post_github(client).json()["outcome"] == "accepted"
 
     assert session.scalars(select(AssetEvent.extra)).one()["payload"] == expected_payload
     assert [delivery.payload for delivery in get_deliveries(session)] == [expected_payload]
@@ -533,7 +533,7 @@ def test_delivery_is_recorded_with_what_arrived(client, session, subscribe):
         "candidates": response.json()["candidates"],
         "asset_events": response.json()["asset_events"],
         "correlation_key": None,
-        "outcome": "events_recorded",
+        "outcome": "accepted",
         "team_name": None,
         "payload": LABELED,
     }
@@ -558,7 +558,7 @@ def test_retried_delivery_is_answered_as_before_and_not_recorded_again(client, s
 
     first, retry = post_github(client), post_github(client)
 
-    assert retry.status_code == 202
+    assert (first.status_code, retry.status_code) == (202, 200)
     assert retry.json() == {**first.json(), "outcome": "duplicate"}
     assert count_asset_events(session) == 1
     assert len(get_deliveries(session)) == 1
@@ -577,6 +577,7 @@ def test_retry_recorded_concurrently_gets_the_answer_of_the_delivery_it_repeats(
     with mock.patch.object(app, "find_delivery", side_effect=find_after_the_first_delivery_committed) as find:
         retry = post_github(client)
 
+    assert retry.status_code == 200
     assert retry.json() == {**first.json(), "outcome": "duplicate"}
     assert count_asset_events(session) == 1
     assert len(get_deliveries(session)) == 1
@@ -588,11 +589,13 @@ def test_redelivery_after_subscribing_records_the_delivery(client, session, subs
     assert post_github(client).json()["status"] == "no_subscribers"
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
 
-    assert post_github(client).json()["status"] == "accepted"
+    redelivery = post_github(client)
+
+    assert (redelivery.status_code, redelivery.json()["status"]) == (202, "accepted")
 
     assert count_asset_events(session) == 1
     assert [(delivery.outcome, delivery.payload) for delivery in get_deliveries(session)] == [
-        ("events_recorded", LABELED)
+        ("accepted", LABELED)
     ]
 
 
@@ -614,6 +617,7 @@ def test_redelivery_recorded_meanwhile_gets_the_answer_of_the_copy_that_recorded
     with mock.patch.object(app, "find_delivery", side_effect=find_before_the_other_copy_committed) as find:
         retry = post_github(client)
 
+    assert retry.status_code == 200
     assert retry.json() == {**first.json(), "outcome": "duplicate"}
     assert count_asset_events(session) == 1
 
@@ -706,7 +710,7 @@ def test_paused_dag_does_not_hold_back_a_live_one_on_the_same_name(client, sessi
     subscribe("paused_preview", name, paused=True)
     subscribe("live_preview", name)
 
-    assert post_github(client).json()["outcome"] == "events_recorded"
+    assert post_github(client).json()["outcome"] == "accepted"
     # Airflow queues only the Dag that is not paused.
     assert get_queued_dag_ids(session) == {"live_preview"}
 
@@ -719,7 +723,7 @@ def test_dag_scheduled_through_an_asset_ref_is_a_subscriber(client, session, sub
     subscribe("paused_preview", name, paused=True)
     subscribe("ref_preview", name, ref=ref)
 
-    assert post_github(client).json()["outcome"] == "events_recorded"
+    assert post_github(client).json()["outcome"] == "accepted"
     # Airflow queues a Dag scheduled through Asset.ref(name=...) or Asset.ref(uri=...) too.
     assert get_queued_dag_ids(session) == {"ref_preview"}
 
@@ -757,21 +761,28 @@ def test_draining_dag_is_no_live_subscriber(client, session, subscribe):
 
 @mock.patch.dict(os.environ, GITHUB_CONN)
 @pytest.mark.parametrize(
-    ("subscribed", "posts", "expected_outcome"),
+    ("subscribed", "posts", "expected_status", "expected_outcome"),
     [
-        pytest.param(True, 1, "events_recorded", id="recorded"),
-        pytest.param(False, 1, "no_subscribers", id="unmatched"),
-        pytest.param(True, 2, "duplicate", id="retry"),
+        pytest.param(True, 1, 202, "accepted", id="recorded"),
+        pytest.param(False, 1, 202, "no_subscribers", id="unmatched"),
+        pytest.param(True, 2, 200, "duplicate", id="retry"),
     ],
 )
-def test_response_says_what_became_of_the_delivery(client, subscribe, subscribed, posts, expected_outcome):
+def test_response_says_what_became_of_the_delivery(
+    client, subscribe, subscribed, posts, expected_status, expected_outcome
+):
     if subscribed:
         subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
 
     for _ in range(posts):
-        body = post_github(client).json()
+        response = post_github(client)
 
-    assert (body["outcome"], body["delivery_id"]) == (expected_outcome, "delivery-1")
+    body = response.json()
+    assert (response.status_code, body["outcome"], body["delivery_id"]) == (
+        expected_status,
+        expected_outcome,
+        "delivery-1",
+    )
 
 
 @mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(rate_limit_per_minute="2")})
@@ -1070,7 +1081,7 @@ def test_recorded_delivery_is_written_to_the_audit_log(client, session, subscrib
 def test_deliveries_that_record_nothing_are_not_audited(client, session, subscribe):
     assert post_github(client, delivery_id="unmatched").json()["outcome"] == "no_subscribers"
     subscribe("web_deploy_preview", "github/my-org/web/pull_request/labeled/deploy-preview")
-    assert post_github(client).json()["outcome"] == "events_recorded"
+    assert post_github(client).json()["outcome"] == "accepted"
     assert post_github(client).json()["outcome"] == "duplicate"
     assert post_github(client, secret="wrong").status_code == 401
 
@@ -1085,10 +1096,10 @@ def test_answered_deliveries_are_counted_and_timed(client, subscribe, stats):
         post_github(client)
 
     assert stats.incr.call_args_list == [
-        mock.call("inbound_webhooks.deliveries.events_recorded", tags={"webhook": "github"}),
-        mock.call("inbound_webhooks.deliveries.duplicate", tags={"webhook": "github"}),
+        mock.call("webhooks.deliveries", tags={"webhook": "github", "outcome": "accepted"}),
+        mock.call("webhooks.deliveries", tags={"webhook": "github", "outcome": "duplicate"}),
     ]
-    stats.timer.assert_called_with("inbound_webhooks.delivery_duration", tags={"webhook": "github"})
+    stats.timer.assert_called_with("webhooks.delivery_duration", tags={"webhook": "github"})
 
 
 @mock.patch.dict(os.environ, {**GITHUB_CONN, **build_config_env(webhook_names="github")})
@@ -1099,6 +1110,6 @@ def test_refused_deliveries_are_counted_by_status_with_unlisted_names_together(c
     assert client.get("/_deliveries/github").status_code == 401
 
     assert stats.incr.call_args_list == [
-        mock.call("inbound_webhooks.rejections.401", tags={"webhook": "github"}),
-        mock.call("inbound_webhooks.rejections.404", tags={"webhook": "other"}),
+        mock.call("webhooks.rejections", tags={"webhook": "github", "status": "401"}),
+        mock.call("webhooks.rejections", tags={"webhook": "other", "status": "404"}),
     ]

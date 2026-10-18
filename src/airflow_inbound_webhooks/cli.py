@@ -45,7 +45,7 @@ ARG_OLDER_THAN = Arg(
     type=int,
     metavar="DAYS",
     help=f"Delete deliveries older than DAYS days (default: [{configuration.SECTION}] "
-    f"{configuration.DELIVERY_RETENTION_DAYS})",
+    f"{configuration.DELIVERY_RETENTION})",
 )
 ARG_DRY_RUN = Arg(("--dry-run",), action="store_true", help="Count the deliveries to delete, and delete none")
 # The options of send_test_event's own parser, which stays free of Airflow imports to run on its own.
@@ -192,7 +192,7 @@ def clean(args: argparse.Namespace) -> None:
     if days is None:
         days = conf.getint(
             configuration.SECTION,
-            configuration.DELIVERY_RETENTION_DAYS,
+            configuration.DELIVERY_RETENTION,
             fallback=configuration.DEFAULT_DELIVERY_RETENTION_DAYS,
         )
     if days < 0:
