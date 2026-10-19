@@ -4,7 +4,7 @@
 Inbound webhooks for Apache Airflow.
 
 ``WebhookTopic``, which Dag files import from here, is a public interface. The Python modules are not
-one yet and can change in any release; see "Versioning" in the README for what is.
+one yet and can change in any release; see "Versioning" in docs/compatibility.md for what is.
 """
 
 from __future__ import annotations

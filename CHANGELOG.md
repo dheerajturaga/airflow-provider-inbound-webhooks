@@ -2,9 +2,10 @@
 
 All notable changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
-[Semantic Versioning](https://semver.org/) for the public interfaces that "Versioning" in the README
-lists. A change to the event names that existing deliveries produce is a
-breaking change, listed under "Changed event names" with the old and new names.
+[Semantic Versioning](https://semver.org/) for the public interfaces that
+[Versioning](docs/compatibility.md#versioning) lists. A change to the event names that existing
+deliveries produce is a breaking change, listed under "Changed event names" with the old and new
+names.
 
 ## Unreleased
 
@@ -68,6 +69,9 @@ breaking change, listed under "Changed event names" with the old and new names.
 
 ### Changed
 
+- The README is now an introduction: what the plugin does, installing it, connecting GitHub and an
+  example Dag. Everything else moved to pages under `docs/`, which the README lists: a quick start,
+  connecting other services, event names, writing Dags, a reference, security and compatibility.
 - Asset events are only recorded on names that a Dag schedules on, directly or through
   `Asset.ref(name=...)` or `Asset.ref(uri=...)`, which is not stale, paused or, on Airflow 3.4 and
   later, draining. A delivery that only paused or draining Dags subscribe to records

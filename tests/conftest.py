@@ -41,7 +41,7 @@ os.environ.update(
     }
 )
 # Airflow 3.2 and later find the DB manager in the provider metadata, which the tests rely on there;
-# 3.1 only runs it when configured, as the README tells its users to.
+# 3.1 only runs it when configured, as docs/compatibility.md tells its users to.
 if Version(version("apache-airflow")) < Version("3.2"):
     os.environ["AIRFLOW__DATABASE__EXTERNAL_DB_MANAGERS"] = "airflow_inbound_webhooks.db.WebhooksDBManager"
 

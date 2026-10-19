@@ -1,7 +1,7 @@
 # Design notes
 
 Background for contributors, and for proposing this feature to Apache Airflow itself. User
-documentation is in the [README](../README.md).
+documentation is in the [README](../README.md) and the other pages of [docs](.).
 
 ## Request flow
 
@@ -264,12 +264,12 @@ from names to asset IDs. It would not remove the dependency on unauthenticated p
    Airflow's audit log page needs to show the owner. Rejected requests write none: anyone can send
    them, and they are counted in a metric instead.
 6. **Name stability.** From 0.1.0, changing a name that an existing delivery produces is a breaking
-   change, released in a new minor version below 1.0 (README, "Event names"). Renaming a repository
-   or project still changes its names, which the plugin cannot prevent.
+   change, released in a new minor version below 1.0 ([Event names](event-names.md), "Stability").
+   Renaming a repository or project still changes its names, which the plugin cannot prevent.
 7. **Source types from other packages.** `SOURCE_TYPES` is a fixed dictionary; other packages could
    contribute source types through an entry point. That would make `WebhookSource` and `WebhookEvent`
    a public interface; until then the Python modules other than `WebhookTopic` are internal
-   (README, "Versioning").
+   ([Versioning](compatibility.md#versioning)).
 8. **Verification handshakes.** Some services verify a URL when the webhook is registered and expect
    a custom response, which the `WebhookSource` interface cannot produce yet.
 
