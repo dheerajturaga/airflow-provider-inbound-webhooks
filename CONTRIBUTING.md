@@ -55,13 +55,13 @@ The tests are organised as:
 |---|---|
 | `tests/test_sources.py` | Verification and parsing of each source type |
 | `tests/test_naming.py` | The event naming rule, and which names one delivery can offer together |
-| `tests/test_name_stability.py` | That deliveries posted to the endpoint keep the names `tests/candidate_names.json` records for them, and that the names the README and the example Dags use are offered |
+| `tests/test_name_stability.py` | That deliveries posted to the endpoint keep the names `tests/candidate_names.json` records for them, and that the names the README, the pages in `docs/` and the example Dags use are offered |
 | `tests/test_topics.py` | `WebhookTopic`: the names it builds or takes, what it refuses, that a Dag scheduled on it keeps its name and group when serialized, and that importing the package imports nothing from Airflow |
 | `tests/test_policy.py` | The checks of Dags that use `WebhookTopic`, and that Airflow loads them from their entry point and shows a refused Dag as its file's import error |
 | `tests/test_app.py` | The endpoint, in process: routing, responses, connection handling |
-| `tests/test_api_server.py` | The real `airflow api-server` with the installed plugin, over HTTP, including the README quick start |
+| `tests/test_api_server.py` | The real `airflow api-server` with the installed plugin, over HTTP, including the quick start in `docs/quick-start.md` |
 | `tests/test_plugin.py` | That importing the plugin, which every Airflow process does, leaves the endpoint's Airflow internals unimported |
-| `tests/test_examples.py` | That every example Dag file builds against the installed Airflow and passes the topic checks, and that the README quick start writes the quick start Dag unchanged |
+| `tests/test_examples.py` | That every example Dag file builds against the installed Airflow and passes the topic checks, and that the quick start in `docs/quick-start.md` writes the quick start Dag unchanged |
 | `tests/test_provider_info.py` | That the provider metadata conforms to the installed Airflow's schema |
 | `tests/test_db.py` | The delivery table: created by `airflow db migrate`, and the same whether built from the metadata or the migrations |
 | `tests/test_deliveries.py` | The deliveries API and page, in process, with the auth manager replaced |
@@ -133,16 +133,17 @@ lookup and recording, is shared. Source types live in `src/airflow_inbound_webho
    of the events it names, as the service sends them, to `DELIVERIES` in
    `tests/test_name_stability.py`, with their webhook's connection in `CONNECTIONS` and the headers
    that authenticate them in `sign()`; then record their names, as below.
-4. Document it under "Source types" in the README.
+4. Document it under "Source types" in `docs/reference.md`, and its names under "Names by source
+   type" in `docs/event-names.md`.
 
 Use the service's own event and action names, so its webhook documentation stays the reference for
 Dag authors.
 
 Event names are part of the interface. Once a source type is released, changing a name that an
-existing delivery produces is a breaking change; see "Stability" under "Event names" in the README.
+existing delivery produces is a breaking change; see "Stability" in `docs/event-names.md`.
 Adding a kind or a detail is not, because the shorter names are still offered. The connection
 options a source type reads, and the fields a summary keeps, are public interfaces too; see
-"Versioning" in the README.
+"Versioning" in `docs/compatibility.md`.
 
 `tests/test_name_stability.py` posts its deliveries to the endpoint, and fails when the names a
 delivery's record keeps are not those `tests/candidate_names.json` records for it. Once a change to
@@ -153,16 +154,18 @@ INBOUND_WEBHOOKS_RECORD_NAMES=1 .venv/bin/pytest tests/test_name_stability.py
 git diff tests/candidate_names.json
 ```
 
-The same module checks the names the README and the example Dags use against those deliveries, so
-each webhook the README sets up, with a connection or a URL, needs deliveries there:
+The same module checks the names the user documentation, the README and the pages in `docs/` other
+than `design.md`, and the example Dags use against those deliveries, so each webhook the
+documentation sets up, with a connection or a URL, needs deliveries there:
 
-- A `text` block of names in the README, with a name at the start of each line and two spaces or
+- A `text` block of names in the documentation, with a name at the start of each line and two spaces or
   more before what it means, lists all the names one delivery offers, in the order it offers them.
   A block of one name shows just that name.
 - Every other name must be one that a delivery offers: in the example Dags, every asset a file
-  defines; in the README, every asset its Python builds, in code blocks and between backticks, and
-  every name between backticks, where `gitlab/platform/*/...` stands for the names that start with
-  `gitlab/platform/*/`. To build assets in the README some other way, add it to `README_NAMESPACE`.
+  defines; in the documentation, every asset its Python builds, in code blocks and between
+  backticks, and every name between backticks, where `gitlab/platform/*/...` stands for the names
+  that start with `gitlab/platform/*/`. To build assets in the documentation some other way, add it
+  to `DOCS_NAMESPACE`.
 
 ## Changing the delivery table
 

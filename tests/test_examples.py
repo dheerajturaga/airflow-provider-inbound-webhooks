@@ -68,10 +68,11 @@ def test_example_dag_tasks_handle_a_run_started_by_hand(parse_dag_file, path):
         task.python_callable(triggering_asset_events=TriggeringAssetEventsAccessor.build([]))
 
 
-def test_readme_quick_start_writes_the_example_dag():
-    # The quick start writes its Dag from the README, so it must stay the file the test above builds.
-    heredoc = re.search(r"<<'EOF'\n(.*?\n) *EOF\n", (ROOT / "README.md").read_text(), re.DOTALL)
-    # The example without its license header, which the README leaves out.
+def test_quick_start_writes_the_example_dag():
+    # The quick start writes its Dag from docs/quick-start.md, so it must stay the file the test above
+    # builds.
+    heredoc = re.search(r"<<'EOF'\n(.*?\n) *EOF\n", (ROOT / "docs" / "quick-start.md").read_text(), re.DOTALL)
+    # The example without its license header, which the quick start leaves out.
     example = (ROOT / "examples" / "dags" / "quickstart.py").read_text().split("\n", 2)[2]
 
     assert heredoc is not None

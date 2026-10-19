@@ -260,7 +260,7 @@ def test_connection_saved_by_the_form_receives_deliveries(api_server_url, api_to
     assert list(session.scalars(select(AssetDagRunQueue.target_dag_id))) == ["smoke_test_billing"]
 
 
-def test_readme_quick_start(api_server_url, session, subscribe, webhook_connection):
+def test_quick_start(api_server_url, session, subscribe, webhook_connection):
     webhook_connection(
         "demo",
         source_type="hmac_json",
@@ -273,9 +273,9 @@ def test_readme_quick_start(api_server_url, session, subscribe, webhook_connecti
     result = send_test_event(f"{api_server_url}/webhooks/demo", {"event": "deployed", "service": "billing"})
 
     assert result.returncode == 0, result.stdout + result.stderr
-    # The step prints what the README shows it printing.
-    readme = (Path(__file__).parents[1] / "README.md").read_text()
-    shown = re.search(r"It prints the response.*?```text\n(.*?\n) *```\n", readme, re.DOTALL)
+    # The step prints what the quick start shows it printing.
+    quick_start = (Path(__file__).parents[1] / "docs" / "quick-start.md").read_text()
+    shown = re.search(r"It prints the response.*?```text\n(.*?\n) *```\n", quick_start, re.DOTALL)
     assert shown is not None
     assert textwrap.dedent(shown.group(1)) == result.stdout
     assert list(session.scalars(select(AssetDagRunQueue.target_dag_id))) == ["smoke_test_billing"]
