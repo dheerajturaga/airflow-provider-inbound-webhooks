@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "airflow-provider-inbound-webhooks"
-version = "0.1.0"
+version = "0.2.0"
 description = "Inbound webhooks for Apache Airflow: deliveries from GitHub, GitLab, Jira and other services become asset events"
 dynamic = ["readme"]
 license = "Apache-2.0"

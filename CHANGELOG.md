@@ -9,6 +9,13 @@ names.
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-19
+
+To upgrade, run `airflow db migrate` after installing, which creates the delivery table; on Airflow
+3.1, first add `airflow_inbound_webhooks.db.WebhooksDBManager` to `[database] external_db_managers`.
+The answers to deliveries changed: see "Removed" for their fields, "Added" for retries, and
+"Changed" for paused Dags and status codes.
+
 ### Added
 
 - Delivery records: every verified delivery is stored in a new table, `inbound_webhooks_delivery`,
@@ -29,7 +36,7 @@ names.
   every other source type the body as received. `summary` on another source type, which 0.1.0's
   form offered, still keeps the body as received, and logs a warning.
 - **Browse → Webhook deliveries** in the Airflow UI, and the same records as JSON under
-  `GET /webhooks/_deliveries/<name>`. Both need an Airflow login and permission to read the
+  `GET /webhooks/_deliveries/<webhook>`. Both need an Airflow login and permission to read the
   webhook's connection.
 - `GET /webhooks/_health`, answered without a login.
 - `delivery_id_field` and `delivery_id_header` for `hmac_json` and `token_header`: where the service
@@ -88,8 +95,6 @@ names.
   requests can now cost two connection reads per webhook and `connection_cache_ttl`, not one.
 - A JSON body holding `NaN` or `Infinity`, which JSON does not allow and MySQL refuses to store, is
   answered with `400`.
-- Upgrading needs `airflow db migrate`, which creates the table. On Airflow 3.1, first add
-  `airflow_inbound_webhooks.db.WebhooksDBManager` to `[database] external_db_managers`.
 - `gitlab` deliveries take their `delivery_id` from `Idempotency-Key`, which GitLab 17.4 and later
   keep across retries, instead of `X-Gitlab-Event-UUID`, which webhooks triggered by earlier webhooks
   share. Deliveries from older GitLab versions have no `delivery_id`.
